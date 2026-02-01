@@ -66,10 +66,10 @@ enum Command {
         key: String,
     },
 
-    /// Take a screenshot (WebP format)
+    /// Take a screenshot (JPEG format, quality 15)
     Screenshot {
-        /// Output path (.webp extension)
-        #[arg(default_value = "/tmp/claude/screenshot.webp")]
+        /// Output path
+        #[arg(default_value = "/tmp/claude/screenshot.jpg")]
         path: String,
         /// Full page screenshot
         #[arg(short, long)]
@@ -411,8 +411,8 @@ async fn main() -> Result<()> {
                 CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
 
             let mut params = serde_json::json!({
-                "format": "webp",
-                "quality": 90
+                "format": "jpeg",
+                "quality": 15
             });
             if full {
                 params["captureBeyondViewport"] = serde_json::json!(true);
