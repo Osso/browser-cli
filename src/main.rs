@@ -66,10 +66,11 @@ enum Command {
         key: String,
     },
 
-    /// Take a screenshot
+    /// Take a screenshot (WebP format)
     Screenshot {
-        /// Output path
-        path: Option<String>,
+        /// Output path (.webp extension)
+        #[arg(default_value = "/tmp/claude/screenshot.webp")]
+        path: String,
         /// Full page screenshot
         #[arg(short, long)]
         full: bool,
@@ -409,7 +410,10 @@ async fn main() -> Result<()> {
             let mut cdp =
                 CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
 
-            let mut params = serde_json::json!({ "format": "png" });
+            let mut params = serde_json::json!({
+                "format": "webp",
+                "quality": 90
+            });
             if full {
                 params["captureBeyondViewport"] = serde_json::json!(true);
             }
@@ -422,16 +426,6 @@ async fn main() -> Result<()> {
 
             use base64::Engine;
             let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-
-            let path = path.unwrap_or_else(|| {
-                format!(
-                    "/tmp/claude/screenshot-{}.png",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                )
-            });
 
             std::fs::write(&path, bytes)?;
             println!("✓ Screenshot saved to {}", path);
