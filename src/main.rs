@@ -134,17 +134,68 @@ struct TargetJson {
     webSocketDebuggerUrl: Option<String>,
 }
 
-async fn get_targets(port: u16) -> Result<Vec<TargetJson>> {
+fn find_chrome_executable() -> Option<&'static str> {
+    const CANDIDATES: &[&str] = &[
+        "google-chrome-stable",
+        "google-chrome",
+        "chromium",
+        "chromium-browser",
+    ];
+    for candidate in CANDIDATES {
+        if std::process::Command::new("which")
+            .arg(candidate)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn start_chrome(port: u16) -> Result<()> {
+    let chrome = find_chrome_executable().context("Chrome not found in PATH")?;
+    std::process::Command::new(chrome)
+        .arg(format!("--remote-debugging-port={}", port))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("Failed to start Chrome")?;
+    Ok(())
+}
+
+async fn try_get_targets(port: u16) -> Option<Vec<TargetJson>> {
     let url = format!("http://127.0.0.1:{}/json", port);
-    let targets: Vec<TargetJson> = reqwest::get(&url)
-        .await
-        .with_context(|| format!("Failed to connect to Chrome on port {}", port))?
-        .json()
-        .await?;
-    Ok(targets
-        .into_iter()
-        .filter(|t| t.r#type == "page" && t.webSocketDebuggerUrl.is_some())
-        .collect())
+    let targets: Vec<TargetJson> = reqwest::get(&url).await.ok()?.json().await.ok()?;
+    Some(
+        targets
+            .into_iter()
+            .filter(|t| t.r#type == "page" && t.webSocketDebuggerUrl.is_some())
+            .collect(),
+    )
+}
+
+async fn get_targets(port: u16) -> Result<Vec<TargetJson>> {
+    // Try to connect first
+    if let Some(targets) = try_get_targets(port).await {
+        return Ok(targets);
+    }
+
+    // Chrome not running, start it
+    eprintln!("Starting Chrome with remote debugging on port {}...", port);
+    start_chrome(port)?;
+
+    // Wait for Chrome to be ready (up to 5 seconds)
+    for _ in 0..50 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        if let Some(targets) = try_get_targets(port).await {
+            return Ok(targets);
+        }
+    }
+
+    anyhow::bail!("Chrome started but failed to connect after 5 seconds")
 }
 
 fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
