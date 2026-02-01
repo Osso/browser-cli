@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -26,9 +26,7 @@ struct Cli {
 enum Command {
     /// Navigate to a URL
     #[command(visible_alias = "goto", visible_alias = "navigate")]
-    Open {
-        url: String,
-    },
+    Open { url: String },
 
     /// Go back in history
     Back,
@@ -44,27 +42,17 @@ enum Command {
     Close,
 
     /// Click an element
-    Click {
-        selector: String,
-    },
+    Click { selector: String },
 
     /// Type text into an element
-    Type {
-        selector: String,
-        text: String,
-    },
+    Type { selector: String, text: String },
 
     /// Clear and fill an element
-    Fill {
-        selector: String,
-        text: String,
-    },
+    Fill { selector: String, text: String },
 
     /// Press a key
     #[command(visible_alias = "key")]
-    Press {
-        key: String,
-    },
+    Press { key: String },
 
     /// Take a screenshot (JPEG format, quality 15)
     Screenshot {
@@ -77,9 +65,7 @@ enum Command {
     },
 
     /// Evaluate JavaScript
-    Eval {
-        script: String,
-    },
+    Eval { script: String },
 
     /// Get page information
     Get {
@@ -192,9 +178,7 @@ impl CdpConnection {
             "params": params
         });
 
-        self.ws
-            .send(Message::Text(msg.to_string()))
-            .await?;
+        self.ws.send(Message::Text(msg.to_string())).await?;
 
         while let Some(msg) = self.ws.next().await {
             if let Ok(Message::Text(text)) = msg {
@@ -600,8 +584,7 @@ async fn main() -> Result<()> {
         Command::Wait { target, url, load } => {
             let targets = get_targets(cli.port).await?;
             let t = find_active_target(&targets)?;
-            let mut cdp =
-                CdpConnection::connect(t.webSocketDebuggerUrl.as_ref().unwrap()).await?;
+            let mut cdp = CdpConnection::connect(t.webSocketDebuggerUrl.as_ref().unwrap()).await?;
 
             if let Some(ms) = target.as_ref().and_then(|s| s.parse::<u64>().ok()) {
                 tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
