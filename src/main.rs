@@ -87,9 +87,9 @@ enum Command {
     },
 
     /// Manage tabs
-    Tab {
+    Tabs {
         #[command(subcommand)]
-        action: Option<TabCommand>,
+        action: TabsCommand,
     },
 
     /// Wait for element, time, or condition
@@ -124,13 +124,15 @@ enum GetCommand {
 }
 
 #[derive(Subcommand)]
-enum TabCommand {
+enum TabsCommand {
     /// List open tabs
     List,
     /// Open new tab
     New { url: Option<String> },
     /// Close tab
     Close { index: Option<usize> },
+    /// Switch to tab by index
+    Switch { index: usize },
 }
 
 // --- CDP Communication ---
@@ -538,11 +540,11 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Tab { action } => {
+        Command::Tabs { action } => {
             let targets = get_targets(cli.port).await?;
 
             match action {
-                None | Some(TabCommand::List) => {
+                TabsCommand::List => {
                     if cli.json {
                         let tabs: Vec<_> = targets
                             .iter()
@@ -561,7 +563,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                Some(TabCommand::New { url }) => {
+                TabsCommand::New { url } => {
                     let target = targets.first().context("No browser targets")?;
                     let mut cdp =
                         CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap())
@@ -571,7 +573,7 @@ async fn main() -> Result<()> {
                         .await?;
                     println!("✓ New tab created");
                 }
-                Some(TabCommand::Close { index }) => {
+                TabsCommand::Close { index } => {
                     let idx = index.unwrap_or(0);
                     let target = targets.get(idx).context("Tab index out of range")?;
                     let any_target = targets.first().unwrap();
@@ -584,6 +586,19 @@ async fn main() -> Result<()> {
                     )
                     .await?;
                     println!("✓ Tab closed");
+                }
+                TabsCommand::Switch { index } => {
+                    let target = targets.get(index).context("Tab index out of range")?;
+                    let any_target = targets.first().unwrap();
+                    let mut cdp =
+                        CdpConnection::connect(any_target.webSocketDebuggerUrl.as_ref().unwrap())
+                            .await?;
+                    cdp.send(
+                        "Target.activateTarget",
+                        serde_json::json!({ "targetId": target.id }),
+                    )
+                    .await?;
+                    println!("✓ Switched to tab {}: {}", index, target.title);
                 }
             }
         }
