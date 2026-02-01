@@ -156,8 +156,12 @@ fn find_chrome_executable() -> Option<&'static str> {
 
 fn start_chrome(port: u16) -> Result<()> {
     let chrome = find_chrome_executable().context("Chrome not found in PATH")?;
+    // Use separate user data dir to avoid conflicts with existing Chrome instances
+    let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
     std::process::Command::new(chrome)
         .arg(format!("--remote-debugging-port={}", port))
+        .arg(format!("--user-data-dir={}", data_dir))
+        .arg("about:blank")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -166,36 +170,67 @@ fn start_chrome(port: u16) -> Result<()> {
     Ok(())
 }
 
-async fn try_get_targets(port: u16) -> Option<Vec<TargetJson>> {
+async fn chrome_is_running(port: u16) -> bool {
+    let url = format!("http://127.0.0.1:{}/json/version", port);
+    reqwest::get(&url).await.is_ok()
+}
+
+async fn get_all_targets(port: u16) -> Result<Vec<TargetJson>> {
     let url = format!("http://127.0.0.1:{}/json", port);
-    let targets: Vec<TargetJson> = reqwest::get(&url).await.ok()?.json().await.ok()?;
-    Some(
-        targets
-            .into_iter()
-            .filter(|t| t.r#type == "page" && t.webSocketDebuggerUrl.is_some())
-            .collect(),
-    )
+    let targets: Vec<TargetJson> = reqwest::get(&url)
+        .await
+        .context("Failed to connect to Chrome")?
+        .json()
+        .await?;
+    Ok(targets
+        .into_iter()
+        .filter(|t| t.r#type == "page" && t.webSocketDebuggerUrl.is_some())
+        .collect())
+}
+
+async fn create_new_tab(port: u16, url: &str) -> Result<TargetJson> {
+    let endpoint = format!(
+        "http://127.0.0.1:{}/json/new?{}",
+        port,
+        urlencoding::encode(url)
+    );
+    let target: TargetJson = reqwest::get(&endpoint)
+        .await
+        .context("Failed to create new tab")?
+        .json()
+        .await?;
+    Ok(target)
 }
 
 async fn get_targets(port: u16) -> Result<Vec<TargetJson>> {
-    // Try to connect first
-    if let Some(targets) = try_get_targets(port).await {
-        return Ok(targets);
-    }
+    // Check if Chrome is running
+    if !chrome_is_running(port).await {
+        eprintln!("Starting Chrome with remote debugging on port {}...", port);
+        start_chrome(port)?;
 
-    // Chrome not running, start it
-    eprintln!("Starting Chrome with remote debugging on port {}...", port);
-    start_chrome(port)?;
+        // Wait for Chrome to be ready (up to 5 seconds)
+        for _ in 0..50 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            if chrome_is_running(port).await {
+                break;
+            }
+        }
 
-    // Wait for Chrome to be ready (up to 5 seconds)
-    for _ in 0..50 {
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        if let Some(targets) = try_get_targets(port).await {
-            return Ok(targets);
+        if !chrome_is_running(port).await {
+            anyhow::bail!("Chrome started but failed to connect after 5 seconds");
         }
     }
 
-    anyhow::bail!("Chrome started but failed to connect after 5 seconds")
+    // Get page targets
+    let mut targets = get_all_targets(port).await?;
+
+    // If no pages, create one
+    if targets.is_empty() {
+        let new_target = create_new_tab(port, "about:blank").await?;
+        targets.push(new_target);
+    }
+
+    Ok(targets)
 }
 
 fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
