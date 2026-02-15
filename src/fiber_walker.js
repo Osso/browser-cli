@@ -55,6 +55,33 @@
       'Insertion4', 'EmotionGlobal', 'CSSVars', 'CSSReset', 'GlobalStyle',
     ]);
 
+    function rectFor(el) {
+      if (!el || typeof el.getBoundingClientRect !== 'function') return undefined;
+      const r = el.getBoundingClientRect();
+      const x = Math.round(r.left + (window.scrollX || window.pageXOffset || 0));
+      const y = Math.round(r.top + (window.scrollY || window.pageYOffset || 0));
+      const width = Math.round(r.width);
+      const height = Math.round(r.height);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) return undefined;
+      return { x, y, width, height };
+    }
+
+    function unionRect(nodes) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let any = false;
+      for (const n of nodes || []) {
+        const b = n && n.boxRect;
+        if (!b) continue;
+        any = true;
+        minX = Math.min(minX, b.x);
+        minY = Math.min(minY, b.y);
+        maxX = Math.max(maxX, b.x + b.width);
+        maxY = Math.max(maxY, b.y + b.height);
+      }
+      if (!any) return undefined;
+      return { x: minX, y: minY, width: Math.max(0, maxX - minX), height: Math.max(0, maxY - minY) };
+    }
+
     function getComponentName(fiber) {
       if (!fiber.type) return null;
       if (typeof fiber.type === 'string') return null;
@@ -65,21 +92,56 @@
       return name && name.length <= 2 && /^[a-z]/.test(name);
     }
 
+    function summarizeValue(val, depth) {
+      depth = depth || 0;
+      if (depth > 1) return '{...}';
+      if (Array.isArray(val)) {
+        if (val.length === 0) return '[]';
+        if (val.length <= 3 && val.every(function(v) { return typeof v !== 'object' || v === null; })) {
+          return JSON.stringify(val);
+        }
+        return '[' + val.length + ']';
+      }
+      if (val && typeof val === 'object') {
+        var keys = Object.keys(val);
+        if (keys.length === 0) return '{}';
+        var parts = [];
+        for (var i = 0; i < Math.min(keys.length, 5); i++) {
+          var k = keys[i];
+          var v = val[k];
+          if (typeof v === 'string') parts.push(k + ': "' + (v.length > 30 ? v.slice(0, 30) + '...' : v) + '"');
+          else if (typeof v === 'number' || typeof v === 'boolean') parts.push(k + ': ' + v);
+          else if (v === null) parts.push(k + ': null');
+          else if (Array.isArray(v)) parts.push(k + ': [' + v.length + ']');
+          else if (typeof v === 'object') parts.push(k + ': ' + summarizeValue(v, depth + 1));
+          else parts.push(k + ': ...');
+        }
+        var s = '{' + parts.join(', ');
+        if (keys.length > 5) s += ', +' + (keys.length - 5);
+        return s + '}';
+      }
+      return String(val);
+    }
+
     function filterProps(props, isHost) {
       if (!props) return {};
       const result = {};
       for (const [key, value] of Object.entries(props)) {
         if (SKIP_PROPS.has(key)) continue;
         if (typeof value === 'function') continue;
-        if (isHost && key.startsWith('on')) continue;
-        if (key.startsWith('data-sentry-')) continue;
-        if (key.startsWith('data-') && !key.startsWith('data-testid') && !key.startsWith('data-gc-')) continue;
-        if (STYLING_PROPS.has(key)) continue;
+        if (isHost) {
+          // Host elements: skip events, data attrs, styling
+          if (key.startsWith('on')) continue;
+          if (key.startsWith('data-sentry-')) continue;
+          if (key.startsWith('data-') && !key.startsWith('data-testid') && !key.startsWith('data-gc-')) continue;
+          if (STYLING_PROPS.has(key)) continue;
+        }
+        // React components: show all non-function, non-children props
         if (typeof value === 'string') {
           result[key] = value.length > 80 ? value.slice(0, 80) + '...' : value;
         } else if (typeof value === 'number' || typeof value === 'boolean') result[key] = value;
         else if (value === null) result[key] = null;
-        else if (value !== undefined) result[key] = '{...}';
+        else if (value !== undefined) result[key] = summarizeValue(value);
       }
       return result;
     }
@@ -137,7 +199,7 @@
       const isHost = typeof fiber.type === 'string';
       const tag = isHost ? fiber.type : null;
       const componentName = isHost ? null : getComponentName(fiber);
-      const domNode = fiber.stateNode instanceof HTMLElement ? fiber.stateNode : null;
+      const domNode = fiber.stateNode && typeof fiber.stateNode.getBoundingClientRect === 'function' ? fiber.stateNode : null;
       const childNodes = processFiber(fiber.child, depth + 1);
 
       if (isHost && tag) {
@@ -147,7 +209,8 @@
         const ariaInfo = getAriaInfo(domNode);
         const htmlAttrs = getHostAttrs(domNode);
         const props = filterProps(fiber.memoizedProps, true);
-        return [{ name: tag, isComponent: false, props, ref: refId, role: ariaInfo.role, ariaName: ariaInfo.ariaName, tag, htmlAttrs: Object.keys(htmlAttrs).length > 0 ? htmlAttrs : undefined, children: childNodes }];
+        const boxRect = rectFor(domNode);
+        return [{ name: tag, isComponent: false, props, ref: refId, boxRect, role: ariaInfo.role, ariaName: ariaInfo.ariaName, tag, htmlAttrs: Object.keys(htmlAttrs).length > 0 ? htmlAttrs : undefined, children: childNodes }];
       }
 
       if (componentName) {
@@ -155,7 +218,8 @@
         if (isMinified(componentName)) { minifiedComponents++; return childNodes; }
         if (SKIP_COMPONENTS.has(componentName)) return childNodes;
         const props = filterProps(fiber.memoizedProps, false);
-        return [{ name: componentName, isComponent: true, props, children: childNodes }];
+        const boxRect = unionRect(childNodes);
+        return [{ name: componentName, isComponent: true, props, boxRect, children: childNodes }];
       }
 
       return childNodes;

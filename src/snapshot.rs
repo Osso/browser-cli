@@ -22,6 +22,8 @@ struct TreeNode {
     props: serde_json::Map<String, serde_json::Value>,
     #[serde(rename = "ref")]
     ref_id: Option<String>,
+    #[serde(default)]
+    box_rect: Option<BoxRect>,
     #[allow(dead_code)]
     role: Option<String>,
     aria_name: Option<String>,
@@ -30,6 +32,15 @@ struct TreeNode {
     html_attrs: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default)]
     children: Vec<TreeNode>,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+struct BoxRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
 }
 
 #[derive(Deserialize)]
@@ -292,6 +303,15 @@ fn format_fiber_node(
         line.push_str(&format!(" [ref={}]", r));
     }
 
+    // Layout box (page coords)
+    if let Some(b) = node.box_rect {
+        let x = b.x.round() as i64;
+        let y = b.y.round() as i64;
+        let w = b.width.round() as i64;
+        let h = b.height.round() as i64;
+        line.push_str(&format!(" [x={} y={} w={} h={}]", x, y, w, h));
+    }
+
     // Props
     for (key, value) in &node.props {
         match value {
@@ -411,6 +431,7 @@ mod tests {
             is_component: true,
             props: serde_json::Map::new(),
             ref_id: None,
+            box_rect: None,
             role: None,
             aria_name: None,
             tag: None,
@@ -430,6 +451,7 @@ mod tests {
             is_component: false,
             props: serde_json::Map::new(),
             ref_id: ref_id.map(String::from),
+            box_rect: None,
             role: None,
             aria_name: aria_name.map(String::from),
             tag: Some(tag.to_string()),
@@ -655,6 +677,7 @@ mod tests {
             is_component: true,
             props,
             ref_id: None,
+            box_rect: None,
             role: None,
             aria_name: None,
             tag: None,
@@ -681,6 +704,7 @@ mod tests {
             is_component: false,
             props: serde_json::Map::new(),
             ref_id: Some("e1".to_string()),
+            box_rect: None,
             role: None,
             aria_name: Some("Home".to_string()),
             tag: Some("a".to_string()),
