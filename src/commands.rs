@@ -147,6 +147,7 @@ pub async fn cmd_snapshot(
     react: bool,
     depth: Option<usize>,
     filter: Option<String>,
+    full: bool,
 ) -> Result<()> {
     let mut cdp = cdp::connect_active(port).await?;
     let opts = SnapshotOptions {
@@ -155,6 +156,7 @@ pub async fn cmd_snapshot(
         react,
         max_depth: depth,
         filter,
+        full,
     };
     let output = snapshot::take_snapshot(&mut cdp, &opts).await?;
     println!("{}", output);
@@ -169,57 +171,60 @@ pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<
         crate::GetCommand::Title => print_field(json, "title", &target.title),
         crate::GetCommand::Url => print_field(json, "url", &target.url),
         crate::GetCommand::Text { selector } => {
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
-            let script = match selector {
-                Some(sel) => format!(
-                    "document.querySelector({})?.innerText || ''",
-                    serde_json::to_string(sel)?
-                ),
-                None => "document.body.innerText".to_string(),
-            };
-            print_eval_str(&mut cdp, &script).await?;
+            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
+            eval_and_print_str(ws, &build_text_script(selector)?).await?;
         }
         crate::GetCommand::Html { selector } => {
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
+            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.innerHTML || ''",
                 serde_json::to_string(selector)?
             );
-            print_eval_str(&mut cdp, &script).await?;
+            eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Value { selector } => {
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
+            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.value || ''",
                 serde_json::to_string(selector)?
             );
-            print_eval_str(&mut cdp, &script).await?;
+            eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Attr { selector, name } => {
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
+            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.getAttribute({}) || ''",
                 serde_json::to_string(selector)?,
                 serde_json::to_string(name)?
             );
-            print_eval_str(&mut cdp, &script).await?;
+            eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Count { selector } => {
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
+            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelectorAll({}).length",
                 serde_json::to_string(selector)?
             );
-            let result = cdp.eval(&script).await?;
+            let result = CdpConnection::connect(ws).await?.eval(&script).await?;
             println!("{}", result);
         }
     }
     Ok(())
+}
+
+fn build_text_script(selector: &Option<String>) -> Result<String> {
+    Ok(match selector {
+        Some(sel) => format!(
+            "document.querySelector({})?.innerText || ''",
+            serde_json::to_string(sel)?
+        ),
+        None => "document.body.innerText".to_string(),
+    })
+}
+
+async fn eval_and_print_str(ws_url: &str, script: &str) -> Result<()> {
+    let mut cdp = CdpConnection::connect(ws_url).await?;
+    print_eval_str(&mut cdp, script).await
 }
 
 fn print_field(json: bool, key: &str, value: &str) {

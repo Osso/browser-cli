@@ -1,6 +1,8 @@
 mod cdp;
 mod commands;
 mod snapshot;
+#[cfg(test)]
+mod snapshot_tests;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -95,6 +97,9 @@ enum Command {
         /// Filter by component/element name (substring or glob with *)
         #[arg(short, long)]
         filter: Option<String>,
+        /// Dump full DOM tree (all elements, not just accessible/React)
+        #[arg(long)]
+        full: bool,
     },
 }
 
@@ -155,6 +160,7 @@ async fn main() -> Result<()> {
             react,
             depth,
             filter,
-        } => commands::cmd_snapshot(port, interactive, compact, react, depth, filter).await,
+            full,
+        } => commands::cmd_snapshot(port, interactive, compact, react, depth, filter, full).await,
     }
 }
