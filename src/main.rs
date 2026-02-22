@@ -100,6 +100,9 @@ enum Command {
         /// Dump full DOM tree (all elements, not just accessible/React)
         #[arg(long)]
         full: bool,
+        /// Minimized DOM tree (collapses wrapper chains)
+        #[arg(long)]
+        mini: bool,
     },
 }
 
@@ -161,6 +164,10 @@ async fn main() -> Result<()> {
             depth,
             filter,
             full,
-        } => commands::cmd_snapshot(port, interactive, compact, react, depth, filter, full).await,
+            mini,
+        } => {
+            commands::cmd_snapshot(port, interactive, compact, react, depth, filter, full, mini)
+                .await
+        }
     }
 }

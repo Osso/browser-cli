@@ -1,6 +1,7 @@
 use crate::snapshot::{
-    collect_filtered_subtrees, format_dom_node, format_fiber_node, glob_match,
-    has_interactive_descendant, DomNode, SnapshotOptions, TreeNode,
+    collapse_dom_tree, collect_filtered_subtrees, flatten_fragments, format_dom_node,
+    format_fiber_node, format_mini_node, glob_match, has_interactive_descendant, DomNode,
+    SnapshotOptions, TreeNode,
 };
 
 fn default_opts() -> SnapshotOptions {
@@ -11,6 +12,7 @@ fn default_opts() -> SnapshotOptions {
         max_depth: None,
         filter: None,
         full: false,
+        mini: false,
     }
 }
 
@@ -352,4 +354,143 @@ fn test_dom_depth_limit() {
     let opts = SnapshotOptions { max_depth: Some(1), ..default_opts() };
     let lines = format_dom(&root, &opts);
     assert_eq!(lines, vec!["- div", "  - section"]);
+}
+
+// Mini snapshot tests
+
+fn collapse_and_format_mini(tree: DomNode, opts: &SnapshotOptions) -> Vec<String> {
+    let collapsed = collapse_dom_tree(tree).unwrap();
+    let roots = if collapsed.tag.is_none() && collapsed.text.is_none() {
+        flatten_fragments(collapsed.children)
+    } else {
+        vec![collapsed]
+    };
+    let mut lines = Vec::new();
+    for root in &roots {
+        format_mini_node(root, 0, opts, &mut lines);
+    }
+    lines
+}
+
+#[test]
+fn test_mini_collapse_single_child_chain() {
+    // div > div > div > a href="/" with text "Home"
+    // Should collapse to just: a href="/" "Home"
+    let tree = make_dom_element(
+        "div",
+        vec![],
+        vec![make_dom_element(
+            "div",
+            vec![],
+            vec![make_dom_element(
+                "div",
+                vec![],
+                vec![make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Home")])],
+            )],
+        )],
+    );
+    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- a href=\"/\" \"Home\""]);
+}
+
+#[test]
+fn test_mini_preserves_attrs() {
+    // div id="root" > a href="/" > "Home"
+    // div has attrs so should NOT be collapsed
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "root")],
+        vec![make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Home")])],
+    );
+    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- div id=\"root\"", "  - a href=\"/\" \"Home\"",]);
+}
+
+#[test]
+fn test_mini_removes_empty() {
+    // div id="root" > (empty div, a href="/")
+    // empty div removed, a promoted as only child of div id="root"
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "root")],
+        vec![
+            make_dom_element("div", vec![], vec![]),
+            make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Click")]),
+        ],
+    );
+    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- div id=\"root\"", "  - a href=\"/\" \"Click\"",]);
+}
+
+#[test]
+fn test_mini_multi_child_wrapper_promotes_children() {
+    // div > (a + button) — bare div promotes both children
+    // Wrapping in a div with attrs to test that promotion works
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "root")],
+        vec![make_dom_element(
+            "div",
+            vec![],
+            vec![
+                make_dom_element("a", vec![("href", "/a")], vec![make_dom_text("Link")]),
+                make_dom_element("button", vec![], vec![make_dom_text("Click")]),
+            ],
+        )],
+    );
+    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let lines = collapse_and_format_mini(tree, &opts);
+    // Inner div collapsed, children promoted into div#root
+    assert_eq!(
+        lines,
+        vec![
+            "- div id=\"root\"",
+            "  - a href=\"/a\" \"Link\"",
+            "  - button \"Click\"",
+        ]
+    );
+}
+
+#[test]
+fn test_mini_real_world_nav_link() {
+    // Simulates: a > div role="group" > div > (img + div > p > "DC")
+    // Should collapse to: a > (img + "DC")
+    let tree = make_dom_element(
+        "a",
+        vec![("aria-label", "DC"), ("href", "/channel/dc")],
+        vec![make_dom_element(
+            "div",
+            vec![("role", "group")],
+            vec![make_dom_element(
+                "div",
+                vec![],
+                vec![
+                    make_dom_element(
+                        "div",
+                        vec![],
+                        vec![make_dom_element("img", vec![("alt", "icon"), ("src", "x.svg")], vec![])],
+                    ),
+                    make_dom_element(
+                        "div",
+                        vec![],
+                        vec![make_dom_element("p", vec![], vec![make_dom_text("DC")])],
+                    ),
+                ],
+            )],
+        )],
+    );
+    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let lines = collapse_and_format_mini(tree, &opts);
+    // role is not meaningful, so div[role=group] collapses too
+    assert_eq!(
+        lines,
+        vec![
+            "- a aria-label=\"DC\" href=\"/channel/dc\"",
+            "  - img alt=\"icon\" src=\"x.svg\"",
+            "  - \"DC\"",
+        ]
+    );
 }

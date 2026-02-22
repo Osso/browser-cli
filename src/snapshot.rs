@@ -11,6 +11,7 @@ pub struct SnapshotOptions {
     pub max_depth: Option<usize>,
     pub filter: Option<String>,
     pub full: bool,
+    pub mini: bool,
 }
 
 /// A node in the accessibility or React fiber tree
@@ -111,7 +112,9 @@ pub async fn take_snapshot(
     cdp: &mut CdpConnection,
     opts: &SnapshotOptions,
 ) -> anyhow::Result<String> {
-    if opts.full {
+    if opts.mini {
+        take_mini_snapshot(cdp, opts).await
+    } else if opts.full {
         take_full_snapshot(cdp, opts).await
     } else if opts.react {
         take_react_snapshot(cdp, opts).await
@@ -474,4 +477,183 @@ fn build_dom_walker_script() -> String {
   return walk(document.documentElement);
 })()"#
         .to_string()
+}
+
+const STRUCTURAL_TAGS: &[&str] = &[
+    "div",
+    "span",
+    "p",
+    "section",
+    "main",
+    "article",
+    "header",
+    "footer",
+    "nav",
+    "aside",
+    "figure",
+    "figcaption",
+    "ul",
+    "ol",
+    "li",
+    "dl",
+    "dt",
+    "dd",
+    "table",
+    "tbody",
+    "thead",
+    "tfoot",
+    "tr",
+    "td",
+    "th",
+    "center",
+    "fieldset",
+    "form",
+];
+
+fn is_structural(tag: &str) -> bool {
+    STRUCTURAL_TAGS.contains(&tag)
+}
+
+/// Check if a node has attrs that are structurally meaningful (not just ARIA/a11y decoration).
+fn has_meaningful_attrs(node: &DomNode) -> bool {
+    node.attrs.keys().any(|k| {
+        !k.starts_with("aria-")
+            && !matches!(k.as_str(), "role" | "tabindex" | "hidden" | "dir" | "lang")
+    })
+}
+
+/// Inline fragment nodes (tag=None, text=None) by promoting their children.
+pub(crate) fn flatten_fragments(nodes: Vec<DomNode>) -> Vec<DomNode> {
+    let mut result = Vec::new();
+    for node in nodes {
+        if node.tag.is_none() && node.text.is_none() {
+            // Fragment — promote its children (recursively flatten)
+            result.extend(flatten_fragments(node.children));
+        } else {
+            result.push(node);
+        }
+    }
+    result
+}
+
+/// Collapse a DOM tree by removing empty structural nodes and collapsing single-child wrappers.
+/// Returns None if the node should be entirely removed.
+pub(crate) fn collapse_dom_tree(node: DomNode) -> Option<DomNode> {
+    // Text nodes: keep as-is (they have no children to process)
+    if node.tag.is_none() {
+        // Remove empty text (no text content)
+        if node.text.as_ref().map_or(true, |t| t.is_empty()) && !node.text.is_some() {
+            return None;
+        }
+        return Some(node);
+    }
+
+    let tag = node.tag.as_deref().unwrap_or("");
+    let structural = is_structural(tag);
+    let no_meaningful_attrs = !has_meaningful_attrs(&node);
+
+    // Process children recursively first (bottom-up)
+    let collapsed_children: Vec<DomNode> =
+        node.children.into_iter().filter_map(collapse_dom_tree).collect();
+
+    // Rule 3 & 4: Remove empty structural elements with no attrs, no children, no text
+    if structural && no_meaningful_attrs && collapsed_children.is_empty() && node.text.is_none() {
+        return None;
+    }
+
+    // Rule 1: Structural wrapper collapse
+    // Structural tag + no attrs + no text → promote children to parent
+    if structural && no_meaningful_attrs && node.text.is_none() {
+        // Return a fragment: tag=None, children hold the promoted nodes
+        return Some(DomNode {
+            tag: None,
+            text: None,
+            attrs: serde_json::Map::new(),
+            children: collapsed_children,
+        });
+    }
+
+    // Flatten any fragment children (from collapsed structural wrappers)
+    let children = flatten_fragments(collapsed_children);
+
+    Some(DomNode {
+        tag: node.tag,
+        text: node.text,
+        attrs: node.attrs,
+        children,
+    })
+}
+
+async fn take_mini_snapshot(
+    cdp: &mut CdpConnection,
+    opts: &SnapshotOptions,
+) -> anyhow::Result<String> {
+    let script = build_dom_walker_script();
+    let result = cdp.eval(&script).await?;
+    let root: DomNode = serde_json::from_value(result)?;
+    let collapsed = match collapse_dom_tree(root) {
+        Some(node) => node,
+        None => return Ok("(empty page)".to_string()),
+    };
+    // If root itself became a fragment, format each promoted child
+    let roots = if collapsed.tag.is_none() && collapsed.text.is_none() {
+        flatten_fragments(collapsed.children)
+    } else {
+        vec![collapsed]
+    };
+    let mut lines = Vec::new();
+    for root in &roots {
+        format_mini_node(root, 0, opts, &mut lines);
+    }
+    if lines.is_empty() {
+        Ok("(empty page)".to_string())
+    } else {
+        Ok(lines.join("\n"))
+    }
+}
+
+pub(crate) fn format_mini_node(
+    node: &DomNode,
+    depth: usize,
+    opts: &SnapshotOptions,
+    lines: &mut Vec<String>,
+) {
+    if let Some(max) = opts.max_depth {
+        if depth > max {
+            return;
+        }
+    }
+
+    let indent = "  ".repeat(depth);
+
+    // Text node
+    if let Some(ref text) = node.text {
+        lines.push(format!("{}- \"{}\"", indent, text));
+        return;
+    }
+
+    let tag = node.tag.as_deref().unwrap_or("?");
+    let mut line = format!("{}- {}", indent, tag);
+    for (key, value) in &node.attrs {
+        if let Some(s) = value.as_str() {
+            line.push_str(&format!(" {}=\"{}\"", key, s));
+        }
+    }
+
+    // Rule 2: Text promotion — single text child gets inlined
+    if node.children.len() == 1 {
+        if let Some(ref text) = node.children[0].text {
+            if node.children[0].tag.is_none() {
+                line.push_str(&format!(" \"{}\"", text));
+                lines.push(line);
+                return;
+            }
+        }
+    }
+
+    lines.push(line);
+
+    for child in &node.children {
+        format_mini_node(child, depth + 1, opts, lines);
+    }
 }

@@ -148,6 +148,7 @@ pub async fn cmd_snapshot(
     depth: Option<usize>,
     filter: Option<String>,
     full: bool,
+    mini: bool,
 ) -> Result<()> {
     let mut cdp = cdp::connect_active(port).await?;
     let opts = SnapshotOptions {
@@ -157,6 +158,7 @@ pub async fn cmd_snapshot(
         max_depth: depth,
         filter,
         full,
+        mini,
     };
     let output = snapshot::take_snapshot(&mut cdp, &opts).await?;
     println!("{}", output);
