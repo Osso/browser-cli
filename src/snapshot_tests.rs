@@ -494,3 +494,152 @@ fn test_mini_real_world_nav_link() {
         ]
     );
 }
+
+#[test]
+fn test_mini_aria_attrs_not_meaningful() {
+    // div with only role/aria-*/tabindex attrs should still collapse
+    let mut attrs = serde_json::Map::new();
+    attrs.insert("role".into(), serde_json::Value::String("group".into()));
+    attrs.insert(
+        "aria-label".into(),
+        serde_json::Value::String("nav".into()),
+    );
+    attrs.insert("tabindex".into(), serde_json::Value::String("-1".into()));
+    let tree = DomNode {
+        tag: Some("div".into()),
+        text: None,
+        attrs,
+        children: vec![make_dom_element(
+            "button",
+            vec![("type", "submit")],
+            vec![make_dom_text("Go")],
+        )],
+    };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- button type=\"submit\" \"Go\""]);
+}
+
+#[test]
+fn test_mini_id_attr_is_meaningful() {
+    // div with id should NOT collapse
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "root"), ("role", "main")],
+        vec![make_dom_element(
+            "a",
+            vec![("href", "/")],
+            vec![make_dom_text("Home")],
+        )],
+    );
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(
+        lines,
+        vec![
+            "- div id=\"root\" role=\"main\"",
+            "  - a href=\"/\" \"Home\"",
+        ]
+    );
+}
+
+#[test]
+fn test_mini_deep_nested_chain() {
+    // 5 levels of bare structural tags wrapping a single link
+    let inner = make_dom_element("a", vec![("href", "/x")], vec![make_dom_text("X")]);
+    let tree = make_dom_element(
+        "div",
+        vec![],
+        vec![make_dom_element(
+            "span",
+            vec![],
+            vec![make_dom_element(
+                "div",
+                vec![],
+                vec![make_dom_element(
+                    "p",
+                    vec![],
+                    vec![make_dom_element("div", vec![], vec![inner])],
+                )],
+            )],
+        )],
+    );
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- a href=\"/x\" \"X\""]);
+}
+
+#[test]
+fn test_mini_depth_limit() {
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "app")],
+        vec![make_dom_element(
+            "a",
+            vec![("href", "/")],
+            vec![make_dom_element("img", vec![("src", "x.png")], vec![])],
+        )],
+    );
+    let opts = SnapshotOptions {
+        mini: true,
+        max_depth: Some(1),
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(lines, vec!["- div id=\"app\"", "  - a href=\"/\""]);
+}
+
+#[test]
+fn test_mini_sibling_text_nodes_preserved() {
+    // Multiple text siblings should all be kept (not promoted since >1 child)
+    let tree = make_dom_element(
+        "div",
+        vec![("id", "info")],
+        vec![make_dom_text("Hello"), make_dom_text("World")],
+    );
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(
+        lines,
+        vec!["- div id=\"info\"", "  - \"Hello\"", "  - \"World\""]
+    );
+}
+
+#[test]
+fn test_mini_non_structural_tag_preserved() {
+    // Non-structural tags (button, svg) should never collapse even without attrs
+    let tree = make_dom_element(
+        "button",
+        vec![],
+        vec![make_dom_element("svg", vec![("viewBox", "0 0 24 24")], vec![])],
+    );
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
+    let lines = collapse_and_format_mini(tree, &opts);
+    assert_eq!(
+        lines,
+        vec!["- button", "  - svg viewBox=\"0 0 24 24\""]
+    );
+}
+
+#[test]
+fn test_full_text_as_separate_child() {
+    // Full mode renders text as separate child line, not inlined
+    let tree = make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Home")]);
+    let lines = format_dom(&tree, &default_opts());
+    assert_eq!(lines, vec!["- a href=\"/\"", "  - \"Home\""]);
+}
