@@ -228,13 +228,26 @@ async fn take_react_snapshot(
     let fiber: FiberResult = match serde_json::from_value(result.clone()) {
         Ok(f) => f,
         Err(_) => {
-            return take_aria_snapshot(cdp, &SnapshotOptions { react: false, ..opts.clone() })
-                .await;
+            return take_aria_snapshot(
+                cdp,
+                &SnapshotOptions {
+                    react: false,
+                    ..opts.clone()
+                },
+            )
+            .await;
         }
     };
 
     if !fiber.found {
-        return take_aria_snapshot(cdp, &SnapshotOptions { react: false, ..opts.clone() }).await;
+        return take_aria_snapshot(
+            cdp,
+            &SnapshotOptions {
+                react: false,
+                ..opts.clone()
+            },
+        )
+        .await;
     }
 
     let mut lines = Vec::new();
@@ -372,7 +385,10 @@ pub(crate) fn collect_filtered_subtrees(
 ) {
     let filter = opts.filter.as_deref().unwrap_or("");
     if name_matches_filter(&node.name, filter) {
-        let no_filter_opts = SnapshotOptions { filter: None, ..opts.clone() };
+        let no_filter_opts = SnapshotOptions {
+            filter: None,
+            ..opts.clone()
+        };
         format_fiber_node(node, 0, &no_filter_opts, lines);
     } else {
         for child in &node.children {
@@ -553,8 +569,11 @@ pub(crate) fn collapse_dom_tree(node: DomNode) -> Option<DomNode> {
     let no_meaningful_attrs = !has_meaningful_attrs(&node);
 
     // Process children recursively first (bottom-up)
-    let collapsed_children: Vec<DomNode> =
-        node.children.into_iter().filter_map(collapse_dom_tree).collect();
+    let collapsed_children: Vec<DomNode> = node
+        .children
+        .into_iter()
+        .filter_map(collapse_dom_tree)
+        .collect();
 
     // Rule 3 & 4: Remove empty structural elements with no attrs, no children, no text
     if structural && no_meaningful_attrs && collapsed_children.is_empty() && node.text.is_none() {

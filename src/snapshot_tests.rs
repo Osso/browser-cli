@@ -1,7 +1,7 @@
 use crate::snapshot::{
-    collapse_dom_tree, collect_filtered_subtrees, flatten_fragments, format_dom_node,
-    format_fiber_node, format_mini_node, glob_match, has_interactive_descendant, DomNode,
-    SnapshotOptions, TreeNode,
+    DomNode, SnapshotOptions, TreeNode, collapse_dom_tree, collect_filtered_subtrees,
+    flatten_fragments, format_dom_node, format_fiber_node, format_mini_node, glob_match,
+    has_interactive_descendant,
 };
 
 fn default_opts() -> SnapshotOptions {
@@ -68,7 +68,12 @@ fn make_dom_element(tag: &str, attrs: Vec<(&str, &str)>, children: Vec<DomNode>)
     for (k, v) in attrs {
         map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
     }
-    DomNode { tag: Some(tag.to_string()), text: None, attrs: map, children }
+    DomNode {
+        tag: Some(tag.to_string()),
+        text: None,
+        attrs: map,
+        children,
+    }
 }
 
 fn make_dom_text(text: &str) -> DomNode {
@@ -116,21 +121,34 @@ fn test_interactive_filter() {
             make_host("a", Some("Home"), Some("e2"), vec![]),
         ],
     )];
-    let opts = SnapshotOptions { interactive: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        interactive: true,
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(
         lines,
-        vec!["- App", "  - button \"OK\" [ref=e1]", "  - a \"Home\" [ref=e2]",]
+        vec![
+            "- App",
+            "  - button \"OK\" [ref=e1]",
+            "  - a \"Home\" [ref=e2]",
+        ]
     );
 }
 
 #[test]
 fn test_compact_filter() {
     let tree = vec![
-        make_component("HasButton", vec![make_host("button", Some("OK"), Some("e1"), vec![])]),
+        make_component(
+            "HasButton",
+            vec![make_host("button", Some("OK"), Some("e1"), vec![])],
+        ),
         make_component("NoInteractive", vec![make_component("Inner", vec![])]),
     ];
-    let opts = SnapshotOptions { compact: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        compact: true,
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(lines, vec!["- HasButton", "  - button \"OK\" [ref=e1]",]);
 }
@@ -144,7 +162,10 @@ fn test_max_depth() {
             vec![make_component("L2", vec![make_component("L3", vec![])])],
         )],
     )];
-    let opts = SnapshotOptions { max_depth: Some(2), ..default_opts() };
+    let opts = SnapshotOptions {
+        max_depth: Some(2),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(lines, vec!["- L0", "  - L1", "    - L2"]);
 }
@@ -154,8 +175,14 @@ fn test_filter_substring() {
     let tree = vec![make_component(
         "App",
         vec![
-            make_component("ComicCard", vec![make_host("a", Some("Comic 1"), Some("e1"), vec![])]),
-            make_component("NavBar", vec![make_host("button", Some("Menu"), Some("e2"), vec![])]),
+            make_component(
+                "ComicCard",
+                vec![make_host("a", Some("Comic 1"), Some("e1"), vec![])],
+            ),
+            make_component(
+                "NavBar",
+                vec![make_host("button", Some("Menu"), Some("e2"), vec![])],
+            ),
             make_component(
                 "ComicList",
                 vec![make_component(
@@ -165,7 +192,10 @@ fn test_filter_substring() {
             ),
         ],
     )];
-    let opts = SnapshotOptions { filter: Some("ComicCard".to_string()), ..default_opts() };
+    let opts = SnapshotOptions {
+        filter: Some("ComicCard".to_string()),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(
         lines,
@@ -180,9 +210,14 @@ fn test_filter_substring() {
 
 #[test]
 fn test_filter_case_insensitive() {
-    let tree =
-        vec![make_component("NavBar", vec![make_host("button", Some("Menu"), Some("e1"), vec![])])];
-    let opts = SnapshotOptions { filter: Some("navbar".to_string()), ..default_opts() };
+    let tree = vec![make_component(
+        "NavBar",
+        vec![make_host("button", Some("Menu"), Some("e1"), vec![])],
+    )];
+    let opts = SnapshotOptions {
+        filter: Some("navbar".to_string()),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(lines, vec!["- NavBar", "  - button \"Menu\" [ref=e1]",]);
 }
@@ -197,7 +232,10 @@ fn test_filter_glob_prefix() {
             make_component("NavBar", vec![]),
         ],
     )];
-    let opts = SnapshotOptions { filter: Some("Comic*".to_string()), ..default_opts() };
+    let opts = SnapshotOptions {
+        filter: Some("Comic*".to_string()),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(lines, vec!["- ComicCard", "- ComicList"]);
 }
@@ -212,16 +250,24 @@ fn test_filter_glob_suffix() {
             make_component("NavBar", vec![]),
         ],
     )];
-    let opts = SnapshotOptions { filter: Some("*Card".to_string()), ..default_opts() };
+    let opts = SnapshotOptions {
+        filter: Some("*Card".to_string()),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert_eq!(lines, vec!["- ComicCard", "- ArtistCard"]);
 }
 
 #[test]
 fn test_filter_no_match() {
-    let tree =
-        vec![make_component("App", vec![make_component("NavBar", vec![])])];
-    let opts = SnapshotOptions { filter: Some("DoesNotExist".to_string()), ..default_opts() };
+    let tree = vec![make_component(
+        "App",
+        vec![make_component("NavBar", vec![])],
+    )];
+    let opts = SnapshotOptions {
+        filter: Some("DoesNotExist".to_string()),
+        ..default_opts()
+    };
     let lines = format_tree(&tree, &opts);
     assert!(lines.is_empty());
 }
@@ -229,7 +275,10 @@ fn test_filter_no_match() {
 #[test]
 fn test_props_rendering() {
     let mut props = serde_json::Map::new();
-    props.insert("slug".to_string(), serde_json::Value::String("batman".to_string()));
+    props.insert(
+        "slug".to_string(),
+        serde_json::Value::String("batman".to_string()),
+    );
     props.insert("count".to_string(), serde_json::json!(42));
     props.insert("active".to_string(), serde_json::Value::Bool(true));
     props.insert("data".to_string(), serde_json::json!({"nested": true}));
@@ -256,7 +305,10 @@ fn test_props_rendering() {
 #[test]
 fn test_html_attrs_on_host() {
     let mut html_attrs = serde_json::Map::new();
-    html_attrs.insert("href".to_string(), serde_json::Value::String("/home".to_string()));
+    html_attrs.insert(
+        "href".to_string(),
+        serde_json::Value::String("/home".to_string()),
+    );
     let tree = vec![TreeNode {
         name: "a".to_string(),
         is_component: false,
@@ -293,7 +345,10 @@ fn test_glob_match_wildcard() {
 fn test_has_interactive_descendant() {
     let tree = make_component(
         "Wrapper",
-        vec![make_component("Inner", vec![make_host("button", Some("OK"), Some("e1"), vec![])])],
+        vec![make_component(
+            "Inner",
+            vec![make_host("button", Some("OK"), Some("e1"), vec![])],
+        )],
     );
     assert!(has_interactive_descendant(&tree));
 
@@ -314,7 +369,11 @@ fn test_dom_basic_tree() {
             vec![make_dom_element(
                 "div",
                 vec![("id", "main")],
-                vec![make_dom_element("p", vec![], vec![make_dom_text("Hello world")])],
+                vec![make_dom_element(
+                    "p",
+                    vec![],
+                    vec![make_dom_text("Hello world")],
+                )],
             )],
         )],
     );
@@ -333,7 +392,11 @@ fn test_dom_basic_tree() {
 
 #[test]
 fn test_dom_attrs_rendered() {
-    let node = make_dom_element("a", vec![("href", "/home"), ("data-testid", "nav-link")], vec![]);
+    let node = make_dom_element(
+        "a",
+        vec![("href", "/home"), ("data-testid", "nav-link")],
+        vec![],
+    );
     let lines = format_dom(&node, &default_opts());
     assert_eq!(lines.len(), 1);
     assert!(lines[0].contains("href=\"/home\""));
@@ -351,7 +414,10 @@ fn test_dom_depth_limit() {
             vec![make_dom_element("p", vec![], vec![make_dom_text("deep")])],
         )],
     );
-    let opts = SnapshotOptions { max_depth: Some(1), ..default_opts() };
+    let opts = SnapshotOptions {
+        max_depth: Some(1),
+        ..default_opts()
+    };
     let lines = format_dom(&root, &opts);
     assert_eq!(lines, vec!["- div", "  - section"]);
 }
@@ -385,11 +451,18 @@ fn test_mini_collapse_single_child_chain() {
             vec![make_dom_element(
                 "div",
                 vec![],
-                vec![make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Home")])],
+                vec![make_dom_element(
+                    "a",
+                    vec![("href", "/")],
+                    vec![make_dom_text("Home")],
+                )],
             )],
         )],
     );
-    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
     let lines = collapse_and_format_mini(tree, &opts);
     assert_eq!(lines, vec!["- a href=\"/\" \"Home\""]);
 }
@@ -401,11 +474,21 @@ fn test_mini_preserves_attrs() {
     let tree = make_dom_element(
         "div",
         vec![("id", "root")],
-        vec![make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Home")])],
+        vec![make_dom_element(
+            "a",
+            vec![("href", "/")],
+            vec![make_dom_text("Home")],
+        )],
     );
-    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
     let lines = collapse_and_format_mini(tree, &opts);
-    assert_eq!(lines, vec!["- div id=\"root\"", "  - a href=\"/\" \"Home\"",]);
+    assert_eq!(
+        lines,
+        vec!["- div id=\"root\"", "  - a href=\"/\" \"Home\"",]
+    );
 }
 
 #[test]
@@ -420,9 +503,15 @@ fn test_mini_removes_empty() {
             make_dom_element("a", vec![("href", "/")], vec![make_dom_text("Click")]),
         ],
     );
-    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
     let lines = collapse_and_format_mini(tree, &opts);
-    assert_eq!(lines, vec!["- div id=\"root\"", "  - a href=\"/\" \"Click\"",]);
+    assert_eq!(
+        lines,
+        vec!["- div id=\"root\"", "  - a href=\"/\" \"Click\"",]
+    );
 }
 
 #[test]
@@ -441,7 +530,10 @@ fn test_mini_multi_child_wrapper_promotes_children() {
             ],
         )],
     );
-    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
     let lines = collapse_and_format_mini(tree, &opts);
     // Inner div collapsed, children promoted into div#root
     assert_eq!(
@@ -471,7 +563,11 @@ fn test_mini_real_world_nav_link() {
                     make_dom_element(
                         "div",
                         vec![],
-                        vec![make_dom_element("img", vec![("alt", "icon"), ("src", "x.svg")], vec![])],
+                        vec![make_dom_element(
+                            "img",
+                            vec![("alt", "icon"), ("src", "x.svg")],
+                            vec![],
+                        )],
                     ),
                     make_dom_element(
                         "div",
@@ -482,7 +578,10 @@ fn test_mini_real_world_nav_link() {
             )],
         )],
     );
-    let opts = SnapshotOptions { mini: true, ..default_opts() };
+    let opts = SnapshotOptions {
+        mini: true,
+        ..default_opts()
+    };
     let lines = collapse_and_format_mini(tree, &opts);
     // role is not meaningful, so div[role=group] collapses too
     assert_eq!(
@@ -500,10 +599,7 @@ fn test_mini_aria_attrs_not_meaningful() {
     // div with only role/aria-*/tabindex attrs should still collapse
     let mut attrs = serde_json::Map::new();
     attrs.insert("role".into(), serde_json::Value::String("group".into()));
-    attrs.insert(
-        "aria-label".into(),
-        serde_json::Value::String("nav".into()),
-    );
+    attrs.insert("aria-label".into(), serde_json::Value::String("nav".into()));
     attrs.insert("tabindex".into(), serde_json::Value::String("-1".into()));
     let tree = DomNode {
         tag: Some("div".into()),
@@ -623,17 +719,18 @@ fn test_mini_non_structural_tag_preserved() {
     let tree = make_dom_element(
         "button",
         vec![],
-        vec![make_dom_element("svg", vec![("viewBox", "0 0 24 24")], vec![])],
+        vec![make_dom_element(
+            "svg",
+            vec![("viewBox", "0 0 24 24")],
+            vec![],
+        )],
     );
     let opts = SnapshotOptions {
         mini: true,
         ..default_opts()
     };
     let lines = collapse_and_format_mini(tree, &opts);
-    assert_eq!(
-        lines,
-        vec!["- button", "  - svg viewBox=\"0 0 24 24\""]
-    );
+    assert_eq!(lines, vec!["- button", "  - svg viewBox=\"0 0 24 24\""]);
 }
 
 #[test]
