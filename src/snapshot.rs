@@ -196,10 +196,8 @@ fn build_ax_tree(nodes: Vec<AXNode>) -> Vec<AXNode> {
     }
 
     let root_ids = find_ax_root_ids(&nodes);
-    let mut by_id: std::collections::HashMap<String, AXNode> = nodes
-        .into_iter()
-        .map(|n| (n.node_id.clone(), n))
-        .collect();
+    let mut by_id: std::collections::HashMap<String, AXNode> =
+        nodes.into_iter().map(|n| (n.node_id.clone(), n)).collect();
 
     root_ids
         .iter()
