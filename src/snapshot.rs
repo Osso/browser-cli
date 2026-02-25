@@ -140,7 +140,7 @@ async fn take_aria_snapshot(
         return Ok("(empty page)".to_string());
     }
 
-    let tree = build_ax_tree(&nodes);
+    let tree = build_ax_tree(nodes);
     let mut lines = Vec::new();
     for node in &tree {
         format_ax_node(node, 0, opts, &mut lines);
@@ -153,11 +153,58 @@ async fn take_aria_snapshot(
     }
 }
 
-fn build_ax_tree(nodes: &[AXNode]) -> Vec<&AXNode> {
+/// Find root node IDs — nodes not referenced as children by any other node.
+fn find_ax_root_ids(nodes: &[AXNode]) -> Vec<String> {
+    let all_child_ids: std::collections::HashSet<&str> = nodes
+        .iter()
+        .flat_map(|n| n.child_ids.iter().map(|s| s.as_str()))
+        .collect();
+
+    let mut roots: Vec<String> = nodes
+        .iter()
+        .filter(|n| !all_child_ids.contains(n.node_id.as_str()))
+        .map(|n| n.node_id.clone())
+        .collect();
+
+    if roots.is_empty() {
+        roots.push(nodes[0].node_id.clone());
+    }
+    roots
+}
+
+/// Recursively extract a node and its children from the flat index.
+fn extract_ax_node(
+    id: &str,
+    by_id: &mut std::collections::HashMap<String, AXNode>,
+) -> Option<AXNode> {
+    let mut node = by_id.remove(id)?;
+    if !node.child_ids.is_empty() {
+        let cids: Vec<String> = node.child_ids.clone();
+        node.children = Some(
+            cids.iter()
+                .filter_map(|cid| extract_ax_node(cid, by_id))
+                .collect(),
+        );
+    }
+    Some(node)
+}
+
+/// Reconstruct nested tree from flat CDP array using child_ids references.
+fn build_ax_tree(nodes: Vec<AXNode>) -> Vec<AXNode> {
     if nodes.is_empty() {
         return vec![];
     }
-    vec![&nodes[0]]
+
+    let root_ids = find_ax_root_ids(&nodes);
+    let mut by_id: std::collections::HashMap<String, AXNode> = nodes
+        .into_iter()
+        .map(|n| (n.node_id.clone(), n))
+        .collect();
+
+    root_ids
+        .iter()
+        .filter_map(|id| extract_ax_node(id, &mut by_id))
+        .collect()
 }
 
 fn ax_value_str(v: &Option<AXValue>) -> Option<String> {
