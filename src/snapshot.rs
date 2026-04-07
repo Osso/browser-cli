@@ -26,8 +26,6 @@ pub(crate) struct TreeNode {
     pub(crate) ref_id: Option<String>,
     #[serde(default)]
     pub(crate) box_rect: Option<BoxRect>,
-    #[allow(dead_code)]
-    pub(crate) role: Option<String>,
     pub(crate) aria_name: Option<String>,
     pub(crate) tag: Option<String>,
     #[serde(default)]
@@ -57,14 +55,12 @@ struct FiberResult {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AXNode {
-    #[allow(dead_code)]
     node_id: String,
     role: Option<AXValue>,
     name: Option<AXValue>,
     #[serde(default)]
     children: Option<Vec<AXNode>>,
     #[serde(default)]
-    #[allow(dead_code)]
     child_ids: Vec<String>,
 }
 
@@ -221,25 +217,13 @@ fn format_ax_node(node: &AXNode, depth: usize, opts: &SnapshotOptions, lines: &m
     let role = ax_value_str(&node.role).unwrap_or_default();
     let name = ax_value_str(&node.name).unwrap_or_default();
 
-    if role == "none" || role == "Ignored" || role == "generic" {
-        if let Some(children) = &node.children {
-            for child in children {
-                format_ax_node(child, depth, opts, lines);
-            }
-        }
-        return;
-    }
+    let ignored_role = role == "none" || role == "Ignored" || role == "generic";
+    let non_interactive = !INTERACTIVE_ROLES.contains(&role.as_str());
+    let skip = ignored_role
+        || (opts.interactive && non_interactive)
+        || (opts.compact && name.is_empty() && non_interactive);
 
-    if opts.interactive && !INTERACTIVE_ROLES.contains(&role.as_str()) {
-        if let Some(children) = &node.children {
-            for child in children {
-                format_ax_node(child, depth, opts, lines);
-            }
-        }
-        return;
-    }
-
-    if opts.compact && name.is_empty() && !INTERACTIVE_ROLES.contains(&role.as_str()) {
+    if skip {
         if let Some(children) = &node.children {
             for child in children {
                 format_ax_node(child, depth, opts, lines);
@@ -315,6 +299,27 @@ async fn take_react_snapshot(
     }
 }
 
+fn format_node_attrs(node: &TreeNode, line: &mut String) {
+    for (key, value) in &node.props {
+        match value {
+            serde_json::Value::String(s) => line.push_str(&format!(" {}=\"{}\"", key, s)),
+            serde_json::Value::Number(n) => line.push_str(&format!(" {}={{{}}}", key, n)),
+            serde_json::Value::Bool(b) => line.push_str(&format!(" {}={{{}}}", key, b)),
+            serde_json::Value::Null => line.push_str(&format!(" {}={{null}}", key)),
+            _ => line.push_str(&format!(" {}={{...}}", key)),
+        }
+    }
+    if let Some(ref attrs) = node.html_attrs {
+        for (key, value) in attrs {
+            if !node.props.contains_key(key) {
+                if let Some(s) = value.as_str() {
+                    line.push_str(&format!(" {}=\"{}\"", key, s));
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn format_fiber_node(
     node: &TreeNode,
     depth: usize,
@@ -362,26 +367,7 @@ pub(crate) fn format_fiber_node(
         line.push_str(&format!(" [x={} y={} w={} h={}]", x, y, w, h));
     }
 
-    for (key, value) in &node.props {
-        match value {
-            serde_json::Value::String(s) => line.push_str(&format!(" {}=\"{}\"", key, s)),
-            serde_json::Value::Number(n) => line.push_str(&format!(" {}={{{}}}", key, n)),
-            serde_json::Value::Bool(b) => line.push_str(&format!(" {}={{{}}}", key, b)),
-            serde_json::Value::Null => line.push_str(&format!(" {}={{null}}", key)),
-            _ => line.push_str(&format!(" {}={{...}}", key)),
-        }
-    }
-
-    if let Some(ref attrs) = node.html_attrs {
-        for (key, value) in attrs {
-            if node.props.contains_key(key) {
-                continue;
-            }
-            if let Some(s) = value.as_str() {
-                line.push_str(&format!(" {}=\"{}\"", key, s));
-            }
-        }
-    }
+    format_node_attrs(node, &mut line);
 
     lines.push(line);
 
@@ -419,7 +405,7 @@ pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
             return false;
         }
     }
-    !parts.last().is_some_and(|p| !p.is_empty()) || pos == text.len()
+    parts.last().is_some_and(|p| p.is_empty()) || pos == text.len()
 }
 
 /// Walk tree looking for nodes matching filter, output each match as a root subtree
@@ -602,8 +588,7 @@ pub(crate) fn flatten_fragments(nodes: Vec<DomNode>) -> Vec<DomNode> {
 pub(crate) fn collapse_dom_tree(node: DomNode) -> Option<DomNode> {
     // Text nodes: keep as-is (they have no children to process)
     if node.tag.is_none() {
-        // Remove empty text (no text content)
-        if node.text.as_ref().map_or(true, |t| t.is_empty()) && !node.text.is_some() {
+        if node.text.is_none() {
             return None;
         }
         return Some(node);

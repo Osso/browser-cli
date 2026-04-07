@@ -4,7 +4,7 @@ use serde::Deserialize;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Deserialize)]
-#[allow(non_snake_case, dead_code)]
+#[allow(non_snake_case)]
 pub struct TargetJson {
     pub id: String,
     pub title: String,
@@ -38,17 +38,19 @@ impl CdpConnection {
         self.ws.send(Message::Text(msg.to_string())).await?;
 
         while let Some(msg) = self.ws.next().await {
-            if let Ok(Message::Text(text)) = msg {
-                let mut de = serde_json::Deserializer::from_str(&text);
-                de.disable_recursion_limit();
-                let resp = serde_json::Value::deserialize(&mut de)?;
-                if resp.get("id") == Some(&serde_json::json!(id)) {
-                    if let Some(error) = resp.get("error") {
-                        return Err(anyhow!("CDP error: {}", error));
-                    }
-                    return Ok(resp.get("result").cloned().unwrap_or(serde_json::json!({})));
-                }
+            let Ok(Message::Text(text)) = msg else {
+                continue;
+            };
+            let mut de = serde_json::Deserializer::from_str(&text);
+            de.disable_recursion_limit();
+            let resp = serde_json::Value::deserialize(&mut de)?;
+            if resp.get("id") != Some(&serde_json::json!(id)) {
+                continue;
             }
+            if let Some(error) = resp.get("error") {
+                return Err(anyhow!("CDP error: {}", error));
+            }
+            return Ok(resp.get("result").cloned().unwrap_or(serde_json::json!({})));
         }
         Err(anyhow!("No response from CDP"))
     }

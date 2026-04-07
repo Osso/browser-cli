@@ -56,40 +56,34 @@ pub async fn cmd_click(port: u16, selector: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_type(port: u16, selector: &str, text: &str) -> Result<()> {
+async fn set_input_value(port: u16, selector: &str, text: &str, append: bool) -> Result<()> {
     let mut cdp = cdp::connect_active(port).await?;
+    let op = if append { "+=" } else { "=" };
     let script = format!(
         r#"(() => {{
             const el = document.querySelector({});
             if (!el) throw new Error('Element not found');
             el.focus();
-            el.value += {};
+            el.value {} {};
             el.dispatchEvent(new Event('input', {{ bubbles: true }}));
             return true;
         }})()"#,
         serde_json::to_string(selector)?,
+        op,
         serde_json::to_string(text)?
     );
     cdp.eval(&script).await?;
+    Ok(())
+}
+
+pub async fn cmd_type(port: u16, selector: &str, text: &str) -> Result<()> {
+    set_input_value(port, selector, text, true).await?;
     println!("✓ Typed");
     Ok(())
 }
 
 pub async fn cmd_fill(port: u16, selector: &str, text: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
-    let script = format!(
-        r#"(() => {{
-            const el = document.querySelector({});
-            if (!el) throw new Error('Element not found');
-            el.focus();
-            el.value = {};
-            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            return true;
-        }})()"#,
-        serde_json::to_string(selector)?,
-        serde_json::to_string(text)?
-    );
-    cdp.eval(&script).await?;
+    set_input_value(port, selector, text, false).await?;
     println!("✓ Filled");
     Ok(())
 }
@@ -168,16 +162,15 @@ pub async fn cmd_snapshot(
 pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<()> {
     let targets = cdp::get_targets(port).await?;
     let target = cdp::find_active_target(&targets)?;
+    let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
 
     match what {
         crate::GetCommand::Title => print_field(json, "title", &target.title),
         crate::GetCommand::Url => print_field(json, "url", &target.url),
         crate::GetCommand::Text { selector } => {
-            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             eval_and_print_str(ws, &build_text_script(selector)?).await?;
         }
         crate::GetCommand::Html { selector } => {
-            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.innerHTML || ''",
                 serde_json::to_string(selector)?
@@ -185,7 +178,6 @@ pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<
             eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Value { selector } => {
-            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.value || ''",
                 serde_json::to_string(selector)?
@@ -193,7 +185,6 @@ pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<
             eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Attr { selector, name } => {
-            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelector({})?.getAttribute({}) || ''",
                 serde_json::to_string(selector)?,
@@ -202,7 +193,6 @@ pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<
             eval_and_print_str(ws, &script).await?;
         }
         crate::GetCommand::Count { selector } => {
-            let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
             let script = format!(
                 "document.querySelectorAll({}).length",
                 serde_json::to_string(selector)?
