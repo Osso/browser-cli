@@ -1,7 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::process::{Command, Stdio};
 use tokio_tungstenite::tungstenite::Message;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn setsid() -> i32;
+}
 
 #[derive(Deserialize)]
 #[allow(non_snake_case)]
@@ -88,7 +94,7 @@ fn find_chrome_executable() -> Option<&'static str> {
         "chromium-browser",
     ];
     for candidate in CANDIDATES {
-        if std::process::Command::new("which")
+        if Command::new("which")
             .arg(candidate)
             .output()
             .map(|o| o.status.success())
@@ -100,22 +106,50 @@ fn find_chrome_executable() -> Option<&'static str> {
     None
 }
 
+fn chrome_launch_args(port: u16) -> Vec<String> {
+    let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
+    vec![
+        format!("--remote-debugging-port={}", port),
+        format!("--user-data-dir={}", data_dir),
+        "--no-first-run".to_string(),
+        "--no-default-browser-check".to_string(),
+        "about:blank".to_string(),
+    ]
+}
+
 fn start_chrome(port: u16) -> Result<()> {
     let chrome = find_chrome_executable().context("Chrome not found in PATH")?;
-    let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
-    std::process::Command::new(chrome)
-        .arg(format!("--remote-debugging-port={}", port))
-        .arg(format!("--user-data-dir={}", data_dir))
-        .arg("--no-first-run")
-        .arg("--no-default-browser-check")
-        .arg("about:blank")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    let mut command = Command::new(chrome);
+    detach_from_parent(&mut command);
+
+    command
+        .args(chrome_launch_args(port))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .context("Failed to start Chrome")?;
     Ok(())
 }
+
+#[cfg(unix)]
+fn detach_from_parent(command: &mut Command) {
+    use std::io;
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(|| {
+            if setsid() == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn detach_from_parent(_command: &mut Command) {}
 
 async fn chrome_is_running(port: u16) -> bool {
     let url = format!("http://127.0.0.1:{}/json/version", port);
@@ -188,4 +222,20 @@ pub async fn connect_active(port: u16) -> Result<CdpConnection> {
     let target = find_active_target(&targets)?;
     let ws_url = target.webSocketDebuggerUrl.as_ref().unwrap();
     CdpConnection::connect(ws_url).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chrome_launch_args;
+
+    #[test]
+    fn chrome_launch_args_include_debug_port_and_profile() {
+        let args = chrome_launch_args(9222);
+
+        assert!(args.contains(&"--remote-debugging-port=9222".to_string()));
+        assert!(args.contains(&"--user-data-dir=/tmp/browser-cli-chrome-9222".to_string()));
+        assert!(args.contains(&"--no-first-run".to_string()));
+        assert!(args.contains(&"--no-default-browser-check".to_string()));
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
 }
