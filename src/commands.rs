@@ -3,6 +3,15 @@ use anyhow::{Context, Result};
 use crate::cdp::{self, CdpConnection};
 use crate::snapshot::{self, SnapshotOptions};
 
+const WAIT_SELECTOR_SCRIPT_TEMPLATE: &str = r#"new Promise((resolve, reject) => {
+    const check = () => {
+        if (document.querySelector(__SELECTOR__)) resolve(true);
+        else setTimeout(check, 100);
+    };
+    setTimeout(() => reject('Timeout'), 30000);
+    check();
+})"#;
+
 pub async fn cmd_open(port: u16, url: String, json: bool) -> Result<()> {
     let url = if url.contains("://") {
         url
@@ -171,36 +180,46 @@ pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<
             eval_and_print_str(ws, &build_text_script(selector)?).await?;
         }
         crate::GetCommand::Html { selector } => {
-            let script = format!(
-                "document.querySelector({})?.innerHTML || ''",
-                serde_json::to_string(selector)?
-            );
-            eval_and_print_str(ws, &script).await?;
+            eval_selector_field(ws, selector, "innerHTML").await?;
         }
         crate::GetCommand::Value { selector } => {
-            let script = format!(
-                "document.querySelector({})?.value || ''",
-                serde_json::to_string(selector)?
-            );
-            eval_and_print_str(ws, &script).await?;
+            eval_selector_field(ws, selector, "value").await?;
         }
         crate::GetCommand::Attr { selector, name } => {
-            let script = format!(
-                "document.querySelector({})?.getAttribute({}) || ''",
-                serde_json::to_string(selector)?,
-                serde_json::to_string(name)?
-            );
-            eval_and_print_str(ws, &script).await?;
+            eval_selector_attr(ws, selector, name).await?;
         }
         crate::GetCommand::Count { selector } => {
-            let script = format!(
-                "document.querySelectorAll({}).length",
-                serde_json::to_string(selector)?
-            );
-            let result = CdpConnection::connect(ws).await?.eval(&script).await?;
-            println!("{}", result);
+            eval_selector_count(ws, selector).await?;
         }
     }
+    Ok(())
+}
+
+async fn eval_selector_field(ws_url: &str, selector: &str, field: &str) -> Result<()> {
+    let script = format!(
+        "document.querySelector({})?.{} || ''",
+        serde_json::to_string(selector)?,
+        field
+    );
+    eval_and_print_str(ws_url, &script).await
+}
+
+async fn eval_selector_attr(ws_url: &str, selector: &str, name: &str) -> Result<()> {
+    let script = format!(
+        "document.querySelector({})?.getAttribute({}) || ''",
+        serde_json::to_string(selector)?,
+        serde_json::to_string(name)?
+    );
+    eval_and_print_str(ws_url, &script).await
+}
+
+async fn eval_selector_count(ws_url: &str, selector: &str) -> Result<()> {
+    let script = format!(
+        "document.querySelectorAll({}).length",
+        serde_json::to_string(selector)?
+    );
+    let result = CdpConnection::connect(ws_url).await?.eval(&script).await?;
+    println!("{}", result);
     Ok(())
 }
 
@@ -239,55 +258,71 @@ pub async fn cmd_tabs(port: u16, action: &crate::TabsCommand, json: bool) -> Res
     let targets = cdp::get_targets(port).await?;
 
     match action {
-        crate::TabsCommand::List => {
-            if json {
-                let tabs: Vec<_> = targets
-                    .iter()
-                    .map(|t| serde_json::json!({ "title": t.title, "url": t.url, "id": t.id }))
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&tabs)?);
-            } else {
-                for (i, target) in targets.iter().enumerate() {
-                    println!("{}: {} - {}", i, target.title, target.url);
-                }
-            }
-        }
+        crate::TabsCommand::List => print_tab_list(&targets, json)?,
         crate::TabsCommand::New { url } => {
-            let target = targets.first().context("No browser targets")?;
-            let mut cdp =
-                CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await?;
-            let url = url.as_deref().unwrap_or("about:blank");
-            cdp.send("Target.createTarget", serde_json::json!({ "url": url }))
-                .await?;
-            println!("✓ New tab created");
+            create_tab(&targets, url.as_deref()).await?;
         }
         crate::TabsCommand::Close { index } => {
-            let idx = index.unwrap_or(0);
-            let target = targets.get(idx).context("Tab index out of range")?;
-            let any = targets.first().unwrap();
-            let mut cdp =
-                CdpConnection::connect(any.webSocketDebuggerUrl.as_ref().unwrap()).await?;
-            cdp.send(
-                "Target.closeTarget",
-                serde_json::json!({ "targetId": target.id }),
-            )
-            .await?;
-            println!("✓ Tab closed");
+            close_tab(&targets, index.unwrap_or(0)).await?;
         }
         crate::TabsCommand::Switch { index } => {
-            let target = targets.get(*index).context("Tab index out of range")?;
-            let any = targets.first().unwrap();
-            let mut cdp =
-                CdpConnection::connect(any.webSocketDebuggerUrl.as_ref().unwrap()).await?;
-            cdp.send(
-                "Target.activateTarget",
-                serde_json::json!({ "targetId": target.id }),
-            )
-            .await?;
-            println!("✓ Switched to tab {}: {}", index, target.title);
+            switch_tab(&targets, *index).await?;
         }
     }
     Ok(())
+}
+
+fn print_tab_list(targets: &[cdp::TargetJson], json: bool) -> Result<()> {
+    if json {
+        let tabs: Vec<_> = targets
+            .iter()
+            .map(|t| serde_json::json!({ "title": t.title, "url": t.url, "id": t.id }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&tabs)?);
+        return Ok(());
+    }
+    for (i, target) in targets.iter().enumerate() {
+        println!("{}: {} - {}", i, target.title, target.url);
+    }
+    Ok(())
+}
+
+async fn create_tab(targets: &[cdp::TargetJson], url: Option<&str>) -> Result<()> {
+    let mut cdp = connect_target_session(targets).await?;
+    let url = url.unwrap_or("about:blank");
+    cdp.send("Target.createTarget", serde_json::json!({ "url": url }))
+        .await?;
+    println!("✓ New tab created");
+    Ok(())
+}
+
+async fn close_tab(targets: &[cdp::TargetJson], idx: usize) -> Result<()> {
+    let target = targets.get(idx).context("Tab index out of range")?;
+    let mut cdp = connect_target_session(targets).await?;
+    cdp.send(
+        "Target.closeTarget",
+        serde_json::json!({ "targetId": target.id }),
+    )
+    .await?;
+    println!("✓ Tab closed");
+    Ok(())
+}
+
+async fn switch_tab(targets: &[cdp::TargetJson], idx: usize) -> Result<()> {
+    let target = targets.get(idx).context("Tab index out of range")?;
+    let mut cdp = connect_target_session(targets).await?;
+    cdp.send(
+        "Target.activateTarget",
+        serde_json::json!({ "targetId": target.id }),
+    )
+    .await?;
+    println!("✓ Switched to tab {}: {}", idx, target.title);
+    Ok(())
+}
+
+async fn connect_target_session(targets: &[cdp::TargetJson]) -> Result<CdpConnection> {
+    let target = targets.first().context("No browser targets")?;
+    CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await
 }
 
 pub async fn cmd_wait(
@@ -301,24 +336,26 @@ pub async fn cmd_wait(
     if let Some(ms) = target.as_ref().and_then(|s| s.parse::<u64>().ok()) {
         tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;
         println!("✓ Waited {}ms", ms);
-    } else if let Some(selector) = target {
-        let script = format!(
-            r#"new Promise((resolve, reject) => {{
-                const check = () => {{
-                    if (document.querySelector({})) resolve(true);
-                    else setTimeout(check, 100);
-                }};
-                setTimeout(() => reject('Timeout'), 30000);
-                check();
-            }})"#,
-            serde_json::to_string(&selector)?
-        );
-        cdp.eval(&script).await?;
+        return Ok(());
+    }
+    if let Some(selector) = target {
+        wait_for_selector(&mut cdp, &selector).await?;
         println!("✓ Element found");
-    } else if url.is_some() {
+        return Ok(());
+    }
+    if url.is_some() {
         println!("URL wait not implemented");
-    } else if load.is_some() {
+        return Ok(());
+    }
+    if load.is_some() {
         println!("Load state wait not implemented");
     }
+    Ok(())
+}
+
+async fn wait_for_selector(cdp: &mut CdpConnection, selector: &str) -> Result<()> {
+    let quoted_selector = serde_json::to_string(selector)?;
+    let script = WAIT_SELECTOR_SCRIPT_TEMPLATE.replace("__SELECTOR__", &quoted_selector);
+    cdp.eval(&script).await?;
     Ok(())
 }
