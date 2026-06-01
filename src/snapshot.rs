@@ -208,40 +208,46 @@ fn ax_value_str(v: &Option<AXValue>) -> Option<String> {
 }
 
 fn format_ax_node(node: &AXNode, depth: usize, opts: &SnapshotOptions, lines: &mut Vec<String>) {
-    if let Some(max) = opts.max_depth {
-        if depth > max {
-            return;
-        }
+    if max_depth_exceeded(opts, depth) {
+        return;
     }
 
     let role = ax_value_str(&node.role).unwrap_or_default();
     let name = ax_value_str(&node.name).unwrap_or_default();
 
-    let ignored_role = role == "none" || role == "Ignored" || role == "generic";
-    let non_interactive = !INTERACTIVE_ROLES.contains(&role.as_str());
-    let skip = ignored_role
-        || (opts.interactive && non_interactive)
-        || (opts.compact && name.is_empty() && non_interactive);
-
-    if skip {
-        if let Some(children) = &node.children {
-            for child in children {
-                format_ax_node(child, depth, opts, lines);
-            }
-        }
+    if should_skip_ax_node(&role, &name, opts) {
+        visit_ax_children(node, depth, opts, lines);
         return;
     }
 
     let indent = "  ".repeat(depth);
-    if name.is_empty() {
-        lines.push(format!("{}- {}", indent, role));
-    } else {
-        lines.push(format!("{}- {} \"{}\"", indent, role, name));
-    }
+    lines.push(format_ax_line(&indent, &role, &name));
+    visit_ax_children(node, depth + 1, opts, lines);
+}
 
+fn max_depth_exceeded(opts: &SnapshotOptions, depth: usize) -> bool {
+    opts.max_depth.is_some_and(|max| depth > max)
+}
+
+fn should_skip_ax_node(role: &str, name: &str, opts: &SnapshotOptions) -> bool {
+    let ignored_role = matches!(role, "none" | "Ignored" | "generic");
+    let non_interactive = !INTERACTIVE_ROLES.contains(&role);
+    ignored_role
+        || (opts.interactive && non_interactive)
+        || (opts.compact && name.is_empty() && non_interactive)
+}
+
+fn format_ax_line(indent: &str, role: &str, name: &str) -> String {
+    if name.is_empty() {
+        return format!("{}- {}", indent, role);
+    }
+    format!("{}- {} \"{}\"", indent, role, name)
+}
+
+fn visit_ax_children(node: &AXNode, depth: usize, opts: &SnapshotOptions, lines: &mut Vec<String>) {
     if let Some(children) = &node.children {
         for child in children {
-            format_ax_node(child, depth + 1, opts, lines);
+            format_ax_node(child, depth, opts, lines);
         }
     }
 }
@@ -254,29 +260,11 @@ async fn take_react_snapshot(
     let script = build_fiber_walker_script(js_depth);
     let result = cdp.eval(&script).await?;
 
-    let fiber: FiberResult = match serde_json::from_value(result.clone()) {
-        Ok(f) => f,
-        Err(_) => {
-            return take_aria_snapshot(
-                cdp,
-                &SnapshotOptions {
-                    react: false,
-                    ..opts.clone()
-                },
-            )
-            .await;
-        }
+    let Some(fiber) = parse_fiber_result(&result) else {
+        return take_aria_fallback(cdp, opts).await;
     };
-
     if !fiber.found {
-        return take_aria_snapshot(
-            cdp,
-            &SnapshotOptions {
-                react: false,
-                ..opts.clone()
-            },
-        )
-        .await;
+        return take_aria_fallback(cdp, opts).await;
     }
 
     let mut lines = Vec::new();
@@ -299,24 +287,49 @@ async fn take_react_snapshot(
     }
 }
 
+fn parse_fiber_result(result: &serde_json::Value) -> Option<FiberResult> {
+    serde_json::from_value(result.clone()).ok()
+}
+
+async fn take_aria_fallback(
+    cdp: &mut CdpConnection,
+    opts: &SnapshotOptions,
+) -> anyhow::Result<String> {
+    take_aria_snapshot(
+        cdp,
+        &SnapshotOptions {
+            react: false,
+            ..opts.clone()
+        },
+    )
+    .await
+}
+
 fn format_node_attrs(node: &TreeNode, line: &mut String) {
     for (key, value) in &node.props {
-        match value {
-            serde_json::Value::String(s) => line.push_str(&format!(" {}=\"{}\"", key, s)),
-            serde_json::Value::Number(n) => line.push_str(&format!(" {}={{{}}}", key, n)),
-            serde_json::Value::Bool(b) => line.push_str(&format!(" {}={{{}}}", key, b)),
-            serde_json::Value::Null => line.push_str(&format!(" {}={{null}}", key)),
-            _ => line.push_str(&format!(" {}={{...}}", key)),
-        }
+        append_prop_attr(line, key, value);
     }
-    if let Some(ref attrs) = node.html_attrs {
-        for (key, value) in attrs {
-            if !node.props.contains_key(key) {
-                if let Some(s) = value.as_str() {
-                    line.push_str(&format!(" {}=\"{}\"", key, s));
-                }
-            }
+    let Some(attrs) = node.html_attrs.as_ref() else {
+        return;
+    };
+    for (key, value) in attrs {
+        if node.props.contains_key(key) {
+            continue;
         }
+        let Some(s) = value.as_str() else {
+            continue;
+        };
+        line.push_str(&format!(" {}=\"{}\"", key, s));
+    }
+}
+
+fn append_prop_attr(line: &mut String, key: &str, value: &serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => line.push_str(&format!(" {}=\"{}\"", key, s)),
+        serde_json::Value::Number(n) => line.push_str(&format!(" {}={{{}}}", key, n)),
+        serde_json::Value::Bool(b) => line.push_str(&format!(" {}={{{}}}", key, b)),
+        serde_json::Value::Null => line.push_str(&format!(" {}={{null}}", key)),
+        _ => line.push_str(&format!(" {}={{...}}", key)),
     }
 }
 
@@ -326,54 +339,70 @@ pub(crate) fn format_fiber_node(
     opts: &SnapshotOptions,
     lines: &mut Vec<String>,
 ) {
-    if let Some(max) = opts.max_depth {
-        if depth > max {
-            return;
-        }
+    if max_depth_exceeded(opts, depth) {
+        return;
     }
 
-    if opts.interactive && !node.is_component {
-        let tag = node.tag.as_deref().unwrap_or("");
-        if !INTERACTIVE_TAGS.contains(&tag) {
-            for child in &node.children {
-                format_fiber_node(child, depth, opts, lines);
-            }
-            return;
+    if should_skip_noninteractive_dom_node(node, opts) {
+        for child in &node.children {
+            format_fiber_node(child, depth, opts, lines);
         }
+        return;
     }
 
     if opts.compact && node.is_component && !has_interactive_descendant(node) {
         return;
     }
 
-    let indent = "  ".repeat(depth);
-    let mut line = format!("{}- {}", indent, node.name);
-
-    if !node.is_component {
-        if let Some(ref name) = node.aria_name {
-            line.push_str(&format!(" \"{}\"", name));
-        }
-    }
-
-    if let Some(ref r) = node.ref_id {
-        line.push_str(&format!(" [ref={}]", r));
-    }
-
-    if let Some(b) = node.box_rect {
-        let x = b.x.round() as i64;
-        let y = b.y.round() as i64;
-        let w = b.width.round() as i64;
-        let h = b.height.round() as i64;
-        line.push_str(&format!(" [x={} y={} w={} h={}]", x, y, w, h));
-    }
-
+    let mut line = build_fiber_line(node, depth);
     format_node_attrs(node, &mut line);
-
     lines.push(line);
-
     for child in &node.children {
         format_fiber_node(child, depth + 1, opts, lines);
     }
+}
+
+fn should_skip_noninteractive_dom_node(node: &TreeNode, opts: &SnapshotOptions) -> bool {
+    if !opts.interactive || node.is_component {
+        return false;
+    }
+    let tag = node.tag.as_deref().unwrap_or("");
+    !INTERACTIVE_TAGS.contains(&tag)
+}
+
+fn build_fiber_line(node: &TreeNode, depth: usize) -> String {
+    let indent = "  ".repeat(depth);
+    let mut line = format!("{}- {}", indent, node.name);
+    append_aria_name(node, &mut line);
+    append_ref(node, &mut line);
+    append_box_rect(node, &mut line);
+    line
+}
+
+fn append_aria_name(node: &TreeNode, line: &mut String) {
+    if node.is_component {
+        return;
+    }
+    if let Some(name) = node.aria_name.as_ref() {
+        line.push_str(&format!(" \"{}\"", name));
+    }
+}
+
+fn append_ref(node: &TreeNode, line: &mut String) {
+    if let Some(ref_id) = node.ref_id.as_ref() {
+        line.push_str(&format!(" [ref={}]", ref_id));
+    }
+}
+
+fn append_box_rect(node: &TreeNode, line: &mut String) {
+    let Some(b) = node.box_rect else {
+        return;
+    };
+    let x = b.x.round() as i64;
+    let y = b.y.round() as i64;
+    let w = b.width.round() as i64;
+    let h = b.height.round() as i64;
+    line.push_str(&format!(" [x={} y={} w={} h={}]", x, y, w, h));
 }
 
 fn name_matches_filter(name: &str, filter: &str) -> bool {
