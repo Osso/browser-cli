@@ -113,6 +113,10 @@ fn chrome_launch_args(port: u16) -> Vec<String> {
         format!("--user-data-dir={}", data_dir),
         "--no-first-run".to_string(),
         "--no-default-browser-check".to_string(),
+        // Suppress the "Restore pages? Chrome didn't shut down correctly" bubble
+        // that appears when the profile was left dirty by a prior unclean exit.
+        "--disable-session-crashed-bubble".to_string(),
+        "--hide-crash-restore-bubble".to_string(),
         "about:blank".to_string(),
     ]
 }
