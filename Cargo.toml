@@ -18,4 +18,4 @@ urlencoding = "2"
 
 [profile.release]
 lto = false
-incremental = true
+
