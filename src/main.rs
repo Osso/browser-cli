@@ -1,5 +1,6 @@
 mod cdp;
 mod commands;
+mod runtime;
 mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;
@@ -104,6 +105,33 @@ enum Command {
         #[arg(long)]
         mini: bool,
     },
+    /// Inspect Runtime console and exception events
+    Runtime {
+        #[command(subcommand)]
+        action: RuntimeCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum RuntimeCommand {
+    /// Capture console API calls
+    Console {
+        /// Reload the page before collecting events
+        #[arg(long)]
+        reload: bool,
+        /// Milliseconds to collect events
+        #[arg(long, default_value_t = 1500)]
+        wait_ms: u64,
+    },
+    /// Capture runtime exceptions
+    Exceptions {
+        /// Reload the page before collecting events
+        #[arg(long)]
+        reload: bool,
+        /// Milliseconds to collect events
+        #[arg(long, default_value_t = 1500)]
+        wait_ms: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -169,5 +197,6 @@ async fn main() -> Result<()> {
             commands::cmd_snapshot(port, interactive, compact, react, depth, filter, full, mini)
                 .await
         }
+        Command::Runtime { action } => runtime::cmd_runtime(port, &action, json).await,
     }
 }

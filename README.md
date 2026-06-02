@@ -92,6 +92,14 @@ browser-cli wait <selector>            # Wait for element
 browser-cli eval "document.title"      # Run JavaScript
 ```
 
+### Runtime diagnostics
+
+```bash
+browser-cli --json runtime console --reload       # Capture console API calls during reload
+browser-cli --json runtime exceptions --reload    # Capture runtime exceptions during reload
+browser-cli --json runtime console --wait-ms 3000 # Collect future console events for 3s
+```
+
 ### Global options
 
 ```bash

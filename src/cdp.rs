@@ -43,13 +43,7 @@ impl CdpConnection {
         let msg = serde_json::json!({ "id": id, "method": method, "params": params });
         self.ws.send(Message::Text(msg.to_string())).await?;
 
-        while let Some(msg) = self.ws.next().await {
-            let Ok(Message::Text(text)) = msg else {
-                continue;
-            };
-            let mut de = serde_json::Deserializer::from_str(&text);
-            de.disable_recursion_limit();
-            let resp = serde_json::Value::deserialize(&mut de)?;
+        while let Some(resp) = self.recv().await? {
             if resp.get("id") != Some(&serde_json::json!(id)) {
                 continue;
             }
@@ -59,6 +53,18 @@ impl CdpConnection {
             return Ok(resp.get("result").cloned().unwrap_or(serde_json::json!({})));
         }
         Err(anyhow!("No response from CDP"))
+    }
+
+    pub async fn recv(&mut self) -> Result<Option<serde_json::Value>> {
+        while let Some(msg) = self.ws.next().await {
+            let Ok(Message::Text(text)) = msg else {
+                continue;
+            };
+            let mut de = serde_json::Deserializer::from_str(&text);
+            de.disable_recursion_limit();
+            return Ok(Some(serde_json::Value::deserialize(&mut de)?));
+        }
+        Ok(None)
     }
 
     pub async fn eval(&mut self, expression: &str) -> Result<serde_json::Value> {
