@@ -94,10 +94,10 @@ impl CdpConnection {
 
 fn find_chrome_executable() -> Option<&'static str> {
     const CANDIDATES: &[&str] = &[
+        "chromium-browser",
+        "chromium",
         "google-chrome-stable",
         "google-chrome",
-        "chromium",
-        "chromium-browser",
     ];
     for candidate in CANDIDATES {
         if Command::new("which")
