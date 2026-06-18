@@ -44,8 +44,13 @@ enum Command {
     Click { selector: String },
     /// Type text into an element
     Type { selector: String, text: String },
-    /// Clear and fill an element
+    /// Clear and fill an element. For file inputs, attaches the file path.
     Fill { selector: String, text: String },
+    /// Attach one or more files to a file input
+    Attach {
+        selector: String,
+        files: Vec<String>,
+    },
     /// Press a key
     #[command(visible_alias = "key")]
     Press { key: String },
@@ -179,6 +184,7 @@ async fn main() -> Result<()> {
         Command::Click { selector } => commands::cmd_click(port, &selector).await,
         Command::Type { selector, text } => commands::cmd_type(port, &selector, &text).await,
         Command::Fill { selector, text } => commands::cmd_fill(port, &selector, &text).await,
+        Command::Attach { selector, files } => commands::cmd_attach(port, &selector, &files).await,
         Command::Press { key } => commands::cmd_press(port, &key).await,
         Command::Screenshot { path, full } => commands::cmd_screenshot(port, &path, full).await,
         Command::Eval { script } => commands::cmd_eval(port, &script, json).await,

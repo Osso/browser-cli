@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
+use std::path::PathBuf;
 
 use crate::cdp::{self, CdpConnection};
 use crate::snapshot::{self, SnapshotOptions};
@@ -67,6 +68,11 @@ pub async fn cmd_click(port: u16, selector: &str) -> Result<()> {
 
 async fn set_input_value(port: u16, selector: &str, text: &str, append: bool) -> Result<()> {
     let mut cdp = cdp::connect_active(port).await?;
+    if !append && is_file_input(&mut cdp, selector).await? {
+        set_file_input_files(&mut cdp, selector, &[text.to_string()]).await?;
+        return Ok(());
+    }
+
     let op = if append { "+=" } else { "=" };
     let script = format!(
         r#"(() => {{
@@ -94,6 +100,101 @@ pub async fn cmd_type(port: u16, selector: &str, text: &str) -> Result<()> {
 pub async fn cmd_fill(port: u16, selector: &str, text: &str) -> Result<()> {
     set_input_value(port, selector, text, false).await?;
     println!("✓ Filled");
+    Ok(())
+}
+
+pub async fn cmd_attach(port: u16, selector: &str, files: &[String]) -> Result<()> {
+    if files.is_empty() {
+        return Err(anyhow!("At least one file path is required"));
+    }
+
+    let mut cdp = cdp::connect_active(port).await?;
+    if !is_file_input(&mut cdp, selector).await? {
+        return Err(anyhow!("Element is not an input[type=file]"));
+    }
+
+    set_file_input_files(&mut cdp, selector, files).await?;
+    println!(
+        "✓ Attached {} file{}",
+        files.len(),
+        if files.len() == 1 { "" } else { "s" }
+    );
+    Ok(())
+}
+
+async fn is_file_input(cdp: &mut CdpConnection, selector: &str) -> Result<bool> {
+    let script = format!(
+        r#"(() => {{
+            const el = document.querySelector({});
+            if (!el) throw new Error('Element not found');
+            return el instanceof HTMLInputElement && el.type === 'file';
+        }})()"#,
+        serde_json::to_string(selector)?
+    );
+    Ok(cdp.eval(&script).await?.as_bool().unwrap_or(false))
+}
+
+async fn set_file_input_files(
+    cdp: &mut CdpConnection,
+    selector: &str,
+    files: &[String],
+) -> Result<()> {
+    let files = files
+        .iter()
+        .map(|file| {
+            let path = PathBuf::from(file);
+            if !path.exists() {
+                return Err(anyhow!("File not found: {}", file));
+            }
+            path.canonicalize()
+                .with_context(|| format!("Failed to resolve file path: {}", file))
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let document = cdp
+        .send("DOM.getDocument", serde_json::json!({ "depth": 0 }))
+        .await?;
+    let root_node_id = document
+        .get("root")
+        .and_then(|root| root.get("nodeId"))
+        .and_then(|node_id| node_id.as_i64())
+        .context("DOM.getDocument did not return a root node")?;
+    let node = cdp
+        .send(
+            "DOM.querySelector",
+            serde_json::json!({
+                "nodeId": root_node_id,
+                "selector": selector,
+            }),
+        )
+        .await?;
+    let node_id = node
+        .get("nodeId")
+        .and_then(|node_id| node_id.as_i64())
+        .filter(|node_id| *node_id != 0)
+        .context("Element not found")?;
+
+    cdp.send(
+        "DOM.setFileInputFiles",
+        serde_json::json!({
+            "nodeId": node_id,
+            "files": files,
+        }),
+    )
+    .await?;
+
+    let event_script = format!(
+        r#"(() => {{
+            const el = document.querySelector({});
+            if (!el) throw new Error('Element not found');
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            return Array.from(el.files || []).map((file) => file.name);
+        }})()"#,
+        serde_json::to_string(selector)?
+    );
+    cdp.eval(&event_script).await?;
     Ok(())
 }
 

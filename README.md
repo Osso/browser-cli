@@ -47,6 +47,7 @@ browser-cli close            # Close tab (aliases: quit, exit)
 browser-cli click <selector>           # Click element
 browser-cli type <selector> <text>     # Append text to element
 browser-cli fill <selector> <text>     # Clear and fill element
+browser-cli attach <selector> <file>   # Attach file(s) to input[type=file]
 browser-cli press <key>                # Press key (alias: key)
 ```
 
@@ -116,6 +117,7 @@ google-chrome-stable --remote-debugging-port=9222 &
 # Navigate and interact
 browser-cli open https://example.com
 browser-cli fill "input[name=search]" "hello world"
+browser-cli attach "input[type=file]" ./document.pdf
 browser-cli click "button[type=submit]"
 browser-cli wait 2000
 browser-cli screenshot result.jpg
