@@ -46,8 +46,11 @@ When `browser-cli` starts Chrome itself, it uses native Chromium Wayland when
 `WAYLAND_DISPLAY` is non-empty. If desktop variables are missing (for example,
 a restarted agent process), it discovers an active `wayland-*` socket under
 `XDG_RUNTIME_DIR` or `/run/user/<uid>` and supplies the required environment to
-Chromium. An explicit non-empty `WAYLAND_DISPLAY` takes precedence. Otherwise,
-a non-empty `DISPLAY` preserves X11 behavior and disables socket discovery.
+Chromium. It also restores `DBUS_SESSION_BUS_ADDRESS` from the runtime bus when
+the launching process lacks desktop-session variables, allowing Chromium to
+reach keyring and native desktop integrations. An explicit non-empty
+`WAYLAND_DISPLAY` takes precedence. Otherwise, a non-empty `DISPLAY` preserves
+X11 behavior and disables socket discovery.
 
 ## Usage
 

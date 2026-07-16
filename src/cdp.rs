@@ -114,6 +114,7 @@ fn find_chrome_executable() -> Option<&'static str> {
 struct WaylandSession {
     runtime_dir: PathBuf,
     display: String,
+    dbus_address: Option<OsString>,
 }
 
 fn resolve_wayland_display<'a>(
@@ -144,12 +145,51 @@ fn resolve_wayland_display<'a>(
 fn discover_wayland_session() -> Option<WaylandSession> {
     let explicit_wayland = std::env::var("WAYLAND_DISPLAY").ok();
     let x11_display = std::env::var("DISPLAY").ok();
-
-    discover_wayland_session_with(
+    let explicit_dbus = std::env::var_os("DBUS_SESSION_BUS_ADDRESS");
+    let mut session = discover_wayland_session_with(
         explicit_wayland.as_deref(),
         x11_display.as_deref(),
         wayland_runtime_dir,
-    )
+    )?;
+    session.dbus_address = resolve_dbus_address(explicit_dbus, &session.runtime_dir);
+    Some(session)
+}
+
+fn resolve_dbus_address(explicit: Option<OsString>, runtime_dir: &Path) -> Option<OsString> {
+    resolve_dbus_address_with(explicit, runtime_dir, is_live_unix_socket)
+}
+
+fn resolve_dbus_address_with(
+    explicit: Option<OsString>,
+    runtime_dir: &Path,
+    is_live_socket: impl FnOnce(&Path) -> bool,
+) -> Option<OsString> {
+    if let Some(address) = explicit.filter(|address| !address.is_empty()) {
+        return Some(address);
+    }
+    let user_id = runtime_dir.file_name()?.to_str()?;
+    let canonical_runtime_dir = runtime_dir.parent() == Some(Path::new("/run/user"))
+        && user_id.chars().all(|character| character.is_ascii_digit());
+    if !canonical_runtime_dir {
+        return None;
+    }
+    let bus_socket = runtime_dir.join("bus");
+    is_live_socket(&bus_socket)
+        .then(|| OsString::from(format!("unix:path=/run/user/{user_id}/bus")))
+}
+
+#[cfg(unix)]
+fn is_live_unix_socket(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::net::UnixStream;
+
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_socket())
+        && UnixStream::connect(path).is_ok()
+}
+
+#[cfg(not(unix))]
+fn is_live_unix_socket(_path: &Path) -> bool {
+    false
 }
 
 fn discover_wayland_session_with(
@@ -174,6 +214,7 @@ fn discover_wayland_session_with(
     Some(WaylandSession {
         runtime_dir,
         display,
+        dbus_address: None,
     })
 }
 
@@ -269,6 +310,9 @@ fn apply_wayland_session(command: &mut Command, session: Option<&WaylandSession>
         command
             .env("XDG_RUNTIME_DIR", &session.runtime_dir)
             .env("WAYLAND_DISPLAY", &session.display);
+        if let Some(dbus_address) = &session.dbus_address {
+            command.env("DBUS_SESSION_BUS_ADDRESS", dbus_address);
+        }
     }
 }
 
@@ -395,7 +439,8 @@ pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
 mod tests {
     use super::{
         WaylandSession, apply_wayland_session, chrome_launch_args, discover_wayland_session_with,
-        resolve_wayland_display, select_wayland_runtime_dir, wayland_socket_names,
+        is_live_unix_socket, resolve_dbus_address_with, resolve_wayland_display,
+        select_wayland_runtime_dir, wayland_socket_names,
     };
     use std::ffi::OsString;
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -506,6 +551,7 @@ mod tests {
         let session = WaylandSession {
             runtime_dir: PathBuf::from("/run/user/1000"),
             display: "wayland-1".to_string(),
+            dbus_address: Some("unix:path=/run/user/1000/bus".into()),
         };
 
         apply_wayland_session(&mut command, Some(&session));
@@ -516,6 +562,60 @@ mod tests {
 
         assert!(environment.contains(&("XDG_RUNTIME_DIR".into(), Some("/run/user/1000".into()))));
         assert!(environment.contains(&("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))));
+        assert!(environment.contains(&(
+            "DBUS_SESSION_BUS_ADDRESS".into(),
+            Some("unix:path=/run/user/1000/bus".into())
+        )));
+    }
+
+    #[test]
+    fn explicit_dbus_address_wins_over_runtime_discovery() {
+        let address = resolve_dbus_address_with(
+            Some("unix:path=/custom/bus".into()),
+            Path::new("/run/user/1000"),
+            |_| false,
+        );
+
+        assert_eq!(address, Some("unix:path=/custom/bus".into()));
+    }
+
+    #[test]
+    fn empty_dbus_address_uses_live_canonical_runtime_bus() {
+        let address =
+            resolve_dbus_address_with(Some(OsString::new()), Path::new("/run/user/1000"), |path| {
+                path == Path::new("/run/user/1000/bus")
+            });
+
+        assert_eq!(address, Some("unix:path=/run/user/1000/bus".into()));
+    }
+
+    #[test]
+    fn dbus_discovery_rejects_noncanonical_runtime_path() {
+        let address = resolve_dbus_address_with(None, Path::new("/tmp/runtime-1000"), |_| true);
+
+        assert_eq!(address, None);
+    }
+
+    #[test]
+    fn dbus_discovery_rejects_missing_or_stale_bus() {
+        let address = resolve_dbus_address_with(None, Path::new("/run/user/1000"), |_| false);
+
+        assert_eq!(address, None);
+    }
+
+    #[test]
+    fn live_unix_socket_validation_rejects_regular_file_and_stale_socket() {
+        let runtime_dir = create_test_runtime_dir();
+        let regular_file = runtime_dir.join("regular");
+        std::fs::write(&regular_file, "not a socket").expect("write regular file");
+        assert!(!is_live_unix_socket(&regular_file));
+
+        let socket = runtime_dir.join("bus");
+        let listener = UnixListener::bind(&socket).expect("bind live socket");
+        assert!(is_live_unix_socket(&socket));
+        drop(listener);
+        assert!(!is_live_unix_socket(&socket));
+        std::fs::remove_dir_all(runtime_dir).expect("remove test runtime directory");
     }
 
     #[test]
