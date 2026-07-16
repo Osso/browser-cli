@@ -1,11 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tokio_tungstenite::tungstenite::Message;
 
 #[cfg(unix)]
 unsafe extern "C" {
+    fn geteuid() -> u32;
     fn setsid() -> i32;
 }
 
@@ -99,22 +101,139 @@ fn find_chrome_executable() -> Option<&'static str> {
         "google-chrome-stable",
         "google-chrome",
     ];
-    for candidate in CANDIDATES {
-        if Command::new("which")
+    CANDIDATES.iter().copied().find(|candidate| {
+        Command::new("which")
             .arg(candidate)
             .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Some(candidate);
-        }
-    }
-    None
+            .is_ok_and(|output| output.status.success())
+    })
 }
 
-fn chrome_launch_args(port: u16) -> Vec<String> {
+#[derive(Debug, PartialEq)]
+struct WaylandSession {
+    runtime_dir: PathBuf,
+    display: String,
+}
+
+fn resolve_wayland_display<'a>(
+    explicit_wayland: Option<&str>,
+    x11_display: Option<&str>,
+    runtime_entries: impl IntoIterator<Item = &'a str>,
+) -> Option<String> {
+    if let Some(display) = explicit_wayland.filter(|display| !display.is_empty()) {
+        return Some(display.to_string());
+    }
+    if x11_display.is_some_and(|display| !display.is_empty()) {
+        return None;
+    }
+
+    let mut displays = runtime_entries
+        .into_iter()
+        .filter(|name| {
+            name.strip_prefix("wayland-").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit())
+            })
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    displays.sort();
+    displays.into_iter().next()
+}
+
+fn discover_wayland_session() -> Option<WaylandSession> {
+    let explicit_wayland = std::env::var("WAYLAND_DISPLAY").ok();
+    let x11_display = std::env::var("DISPLAY").ok();
+
+    discover_wayland_session_with(
+        explicit_wayland.as_deref(),
+        x11_display.as_deref(),
+        wayland_runtime_dir,
+    )
+}
+
+fn discover_wayland_session_with(
+    explicit_wayland: Option<&str>,
+    x11_display: Option<&str>,
+    read_runtime_dir: impl FnOnce() -> Option<PathBuf>,
+) -> Option<WaylandSession> {
+    if x11_display.is_some_and(|display| !display.is_empty())
+        && explicit_wayland.is_none_or(|display| display.is_empty())
+    {
+        return None;
+    }
+
+    let runtime_dir = read_runtime_dir()?;
+    let socket_names = wayland_socket_names(&runtime_dir);
+    let display = resolve_wayland_display(
+        explicit_wayland,
+        x11_display,
+        socket_names.iter().map(String::as_str),
+    )?;
+
+    Some(WaylandSession {
+        runtime_dir,
+        display,
+    })
+}
+
+fn wayland_runtime_dir() -> Option<PathBuf> {
+    let configured_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
+
+    #[cfg(unix)]
+    let effective_user_id = Some(unsafe { geteuid() });
+    #[cfg(not(unix))]
+    let effective_user_id = None;
+
+    select_wayland_runtime_dir(configured_runtime_dir, effective_user_id)
+}
+
+fn select_wayland_runtime_dir(
+    configured_runtime_dir: Option<std::ffi::OsString>,
+    effective_user_id: Option<u32>,
+) -> Option<PathBuf> {
+    if let Some(runtime_dir) = configured_runtime_dir.filter(|path| !path.is_empty()) {
+        return Some(runtime_dir.into());
+    }
+
+    effective_user_id.map(|user_id| PathBuf::from(format!("/run/user/{user_id}")))
+}
+
+#[cfg(unix)]
+fn wayland_socket_names(runtime_dir: &Path) -> Vec<String> {
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::net::UnixStream;
+
+    let Ok(entries) = std::fs::read_dir(runtime_dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_ok_and(|file_type| file_type.is_socket())
+        })
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let suffix = name.strip_prefix("wayland-")?;
+            let is_wayland_display =
+                !suffix.is_empty() && suffix.chars().all(|character| character.is_ascii_digit());
+            is_wayland_display.then_some((name, entry.path()))
+        })
+        .filter(|(_, path)| UnixStream::connect(path).is_ok())
+        .map(|(name, _)| name)
+        .collect()
+}
+
+#[cfg(not(unix))]
+fn wayland_socket_names(_runtime_dir: &Path) -> Vec<String> {
+    Vec::new()
+}
+
+fn chrome_launch_args(port: u16, wayland_display: Option<&str>) -> Vec<String> {
     let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
-    vec![
+    let mut args = vec![
         format!("--remote-debugging-port={}", port),
         format!("--user-data-dir={}", data_dir),
         "--no-first-run".to_string(),
@@ -123,8 +242,20 @@ fn chrome_launch_args(port: u16) -> Vec<String> {
         // that appears when the profile was left dirty by a prior unclean exit.
         "--disable-session-crashed-bubble".to_string(),
         "--hide-crash-restore-bubble".to_string(),
-        "about:blank".to_string(),
-    ]
+    ];
+    if wayland_display.is_some_and(|display| !display.is_empty()) {
+        args.push("--ozone-platform=wayland".to_string());
+    }
+    args.push("about:blank".to_string());
+    args
+}
+
+fn apply_wayland_session(command: &mut Command, session: Option<&WaylandSession>) {
+    if let Some(session) = session {
+        command
+            .env("XDG_RUNTIME_DIR", &session.runtime_dir)
+            .env("WAYLAND_DISPLAY", &session.display);
+    }
 }
 
 fn start_chrome(port: u16) -> Result<()> {
@@ -132,8 +263,16 @@ fn start_chrome(port: u16) -> Result<()> {
     let mut command = Command::new(chrome);
     detach_from_parent(&mut command);
 
+    let wayland_session = discover_wayland_session();
+    apply_wayland_session(&mut command, wayland_session.as_ref());
+
     command
-        .args(chrome_launch_args(port))
+        .args(chrome_launch_args(
+            port,
+            wayland_session
+                .as_ref()
+                .map(|session| session.display.as_str()),
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -236,16 +375,155 @@ pub async fn connect_active(port: u16) -> Result<CdpConnection> {
 
 #[cfg(test)]
 mod tests {
-    use super::chrome_launch_args;
+    use super::{
+        WaylandSession, apply_wayland_session, chrome_launch_args, discover_wayland_session_with,
+        resolve_wayland_display, select_wayland_runtime_dir, wayland_socket_names,
+    };
+    use std::os::unix::net::UnixListener;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    fn create_test_runtime_dir() -> PathBuf {
+        let runtime_dir = std::env::temp_dir().join(format!(
+            "browser-cli-wayland-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&runtime_dir).expect("create test runtime directory");
+        runtime_dir
+    }
 
     #[test]
     fn chrome_launch_args_include_debug_port_and_profile() {
-        let args = chrome_launch_args(9222);
+        let args = chrome_launch_args(9222, None);
 
         assert!(args.contains(&"--remote-debugging-port=9222".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/browser-cli-chrome-9222".to_string()));
         assert!(args.contains(&"--no-first-run".to_string()));
         assert!(args.contains(&"--no-default-browser-check".to_string()));
         assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
+
+    #[test]
+    fn chrome_launch_args_use_native_wayland_when_available() {
+        let args = chrome_launch_args(9222, Some("wayland-1"));
+
+        assert!(args.contains(&"--ozone-platform=wayland".to_string()));
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_x11_without_wayland() {
+        let args = chrome_launch_args(9222, None);
+
+        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_x11_for_empty_wayland_display() {
+        let args = chrome_launch_args(9222, Some(""));
+
+        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
+    }
+
+    #[test]
+    fn configured_runtime_directory_wins_over_user_fallback() {
+        let runtime_dir = select_wayland_runtime_dir(Some("/custom/runtime".into()), Some(1000));
+
+        assert_eq!(runtime_dir.as_deref(), Some(Path::new("/custom/runtime")));
+    }
+
+    #[test]
+    fn missing_runtime_directory_uses_effective_user_directory() {
+        let runtime_dir = select_wayland_runtime_dir(None, Some(1000));
+
+        assert_eq!(runtime_dir.as_deref(), Some(Path::new("/run/user/1000")));
+    }
+
+    #[test]
+    fn wayland_session_is_added_to_chromium_environment() {
+        let mut command = Command::new("chromium");
+        let session = WaylandSession {
+            runtime_dir: PathBuf::from("/run/user/1000"),
+            display: "wayland-1".to_string(),
+        };
+
+        apply_wayland_session(&mut command, Some(&session));
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
+            .collect::<Vec<_>>();
+
+        assert!(environment.contains(&("XDG_RUNTIME_DIR".into(), Some("/run/user/1000".into()))));
+        assert!(environment.contains(&("WAYLAND_DISPLAY".into(), Some("wayland-1".into()))));
+    }
+
+    #[test]
+    fn explicit_wayland_display_wins_over_runtime_discovery() {
+        let display =
+            resolve_wayland_display(Some("wayland-9"), None, ["wayland-1", "wayland-1.lock"]);
+
+        assert_eq!(display.as_deref(), Some("wayland-9"));
+    }
+
+    #[test]
+    fn x11_display_disables_wayland_socket_discovery() {
+        let runtime_dir = create_test_runtime_dir();
+        let unrelated_listener =
+            UnixListener::bind(runtime_dir.join("pipewire-0")).expect("bind unrelated socket");
+        unrelated_listener
+            .set_nonblocking(true)
+            .expect("make unrelated socket nonblocking");
+
+        let session = discover_wayland_session_with(None, Some(":0"), || Some(runtime_dir.clone()));
+
+        assert_eq!(session, None);
+        let accept_error = unrelated_listener
+            .accept()
+            .expect_err("X11 selection must not connect to runtime sockets");
+        assert_eq!(accept_error.kind(), std::io::ErrorKind::WouldBlock);
+        drop(unrelated_listener);
+        std::fs::remove_dir_all(runtime_dir).expect("remove test runtime directory");
+    }
+
+    #[test]
+    fn missing_desktop_environment_uses_wayland_runtime_socket() {
+        let display =
+            resolve_wayland_display(None, None, ["wayland-1.lock", "pipewire-0", "wayland-1"]);
+
+        assert_eq!(display.as_deref(), Some("wayland-1"));
+    }
+
+    #[test]
+    fn runtime_discovery_ignores_non_socket_names() {
+        let display =
+            resolve_wayland_display(None, None, ["wayland-1.lock", "niri.wayland-1.sock"]);
+
+        assert_eq!(display, None);
+    }
+
+    #[test]
+    fn runtime_discovery_ignores_stale_wayland_sockets() {
+        let runtime_dir = create_test_runtime_dir();
+        let stale_path = runtime_dir.join("wayland-0");
+        let stale_listener = UnixListener::bind(&stale_path).expect("bind stale socket");
+        drop(stale_listener);
+        let live_listener =
+            UnixListener::bind(runtime_dir.join("wayland-1")).expect("bind live socket");
+        let unrelated_listener =
+            UnixListener::bind(runtime_dir.join("pipewire-0")).expect("bind unrelated socket");
+        unrelated_listener
+            .set_nonblocking(true)
+            .expect("make unrelated socket nonblocking");
+
+        let names = wayland_socket_names(&runtime_dir);
+
+        assert_eq!(names, vec!["wayland-1"]);
+        let accept_error = unrelated_listener
+            .accept()
+            .expect_err("discovery must not connect to unrelated sockets");
+        assert_eq!(accept_error.kind(), std::io::ErrorKind::WouldBlock);
+        drop(live_listener);
+        drop(unrelated_listener);
+        std::fs::remove_dir_all(runtime_dir).expect("remove test runtime directory");
     }
 }
