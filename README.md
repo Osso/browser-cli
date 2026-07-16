@@ -30,9 +30,11 @@ google-chrome-stable --remote-debugging-port=9222
 ```
 
 When `browser-cli` starts Chrome itself, it uses native Chromium Wayland when
-`WAYLAND_DISPLAY` is non-empty by adding `--ozone-platform=wayland`. If
-`WAYLAND_DISPLAY` is unset or empty, no Ozone platform flag is added, preserving
-X11 behavior.
+`WAYLAND_DISPLAY` is non-empty. If desktop variables are missing (for example,
+a restarted agent process), it discovers an active `wayland-*` socket under
+`XDG_RUNTIME_DIR` or `/run/user/<uid>` and supplies the required environment to
+Chromium. An explicit non-empty `WAYLAND_DISPLAY` takes precedence. Otherwise,
+a non-empty `DISPLAY` preserves X11 behavior and disables socket discovery.
 
 ## Usage
 
