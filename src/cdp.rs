@@ -112,9 +112,9 @@ fn find_chrome_executable() -> Option<&'static str> {
     None
 }
 
-fn chrome_launch_args(port: u16) -> Vec<String> {
+fn chrome_launch_args(port: u16, wayland_display: Option<&str>) -> Vec<String> {
     let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
-    vec![
+    let mut args = vec![
         format!("--remote-debugging-port={}", port),
         format!("--user-data-dir={}", data_dir),
         "--no-first-run".to_string(),
@@ -123,8 +123,12 @@ fn chrome_launch_args(port: u16) -> Vec<String> {
         // that appears when the profile was left dirty by a prior unclean exit.
         "--disable-session-crashed-bubble".to_string(),
         "--hide-crash-restore-bubble".to_string(),
-        "about:blank".to_string(),
-    ]
+    ];
+    if wayland_display.is_some_and(|display| !display.is_empty()) {
+        args.push("--ozone-platform=wayland".to_string());
+    }
+    args.push("about:blank".to_string());
+    args
 }
 
 fn start_chrome(port: u16) -> Result<()> {
@@ -132,8 +136,10 @@ fn start_chrome(port: u16) -> Result<()> {
     let mut command = Command::new(chrome);
     detach_from_parent(&mut command);
 
+    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
+
     command
-        .args(chrome_launch_args(port))
+        .args(chrome_launch_args(port, wayland_display.as_deref()))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -240,12 +246,33 @@ mod tests {
 
     #[test]
     fn chrome_launch_args_include_debug_port_and_profile() {
-        let args = chrome_launch_args(9222);
+        let args = chrome_launch_args(9222, None);
 
         assert!(args.contains(&"--remote-debugging-port=9222".to_string()));
         assert!(args.contains(&"--user-data-dir=/tmp/browser-cli-chrome-9222".to_string()));
         assert!(args.contains(&"--no-first-run".to_string()));
         assert!(args.contains(&"--no-default-browser-check".to_string()));
         assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
+
+    #[test]
+    fn chrome_launch_args_use_native_wayland_when_available() {
+        let args = chrome_launch_args(9222, Some("wayland-1"));
+
+        assert!(args.contains(&"--ozone-platform=wayland".to_string()));
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_x11_without_wayland() {
+        let args = chrome_launch_args(9222, None);
+
+        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_x11_for_empty_wayland_display() {
+        let args = chrome_launch_args(9222, Some(""));
+
+        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
     }
 }

@@ -29,6 +29,11 @@ Chrome must be running with remote debugging enabled:
 google-chrome-stable --remote-debugging-port=9222
 ```
 
+When `browser-cli` starts Chrome itself, it uses native Chromium Wayland when
+`WAYLAND_DISPLAY` is non-empty by adding `--ozone-platform=wayland`. If
+`WAYLAND_DISPLAY` is unset or empty, no Ozone platform flag is added, preserving
+X11 behavior.
+
 ## Usage
 
 ### Navigation
