@@ -458,12 +458,11 @@ pub(crate) fn collect_filtered_subtrees(
 }
 
 pub(crate) fn has_interactive_descendant(node: &TreeNode) -> bool {
-    if !node.is_component {
-        if let Some(ref tag) = node.tag {
-            if INTERACTIVE_TAGS.contains(&tag.as_str()) {
-                return true;
-            }
-        }
+    if !node.is_component
+        && let Some(ref tag) = node.tag
+        && INTERACTIVE_TAGS.contains(&tag.as_str())
+    {
+        return true;
     }
     node.children.iter().any(has_interactive_descendant)
 }
@@ -498,10 +497,10 @@ pub(crate) fn format_dom_node(
     opts: &SnapshotOptions,
     lines: &mut Vec<String>,
 ) {
-    if let Some(max) = opts.max_depth {
-        if depth > max {
-            return;
-        }
+    if let Some(max) = opts.max_depth
+        && depth > max
+    {
+        return;
     }
 
     let indent = "  ".repeat(depth);
@@ -617,9 +616,7 @@ pub(crate) fn flatten_fragments(nodes: Vec<DomNode>) -> Vec<DomNode> {
 pub(crate) fn collapse_dom_tree(node: DomNode) -> Option<DomNode> {
     // Text nodes: keep as-is (they have no children to process)
     if node.tag.is_none() {
-        if node.text.is_none() {
-            return None;
-        }
+        node.text.as_ref()?;
         return Some(node);
     }
 
@@ -696,10 +693,10 @@ pub(crate) fn format_mini_node(
     opts: &SnapshotOptions,
     lines: &mut Vec<String>,
 ) {
-    if let Some(max) = opts.max_depth {
-        if depth > max {
-            return;
-        }
+    if let Some(max) = opts.max_depth
+        && depth > max
+    {
+        return;
     }
 
     let indent = "  ".repeat(depth);
@@ -719,14 +716,13 @@ pub(crate) fn format_mini_node(
     }
 
     // Rule 2: Text promotion — single text child gets inlined
-    if node.children.len() == 1 {
-        if let Some(ref text) = node.children[0].text {
-            if node.children[0].tag.is_none() {
-                line.push_str(&format!(" \"{}\"", text));
-                lines.push(line);
-                return;
-            }
-        }
+    if node.children.len() == 1
+        && let Some(ref text) = node.children[0].text
+        && node.children[0].tag.is_none()
+    {
+        line.push_str(&format!(" \"{}\"", text));
+        lines.push(line);
+        return;
     }
 
     lines.push(line);

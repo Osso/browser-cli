@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use std::path::PathBuf;
 
-use crate::cdp::{self, CdpConnection};
+use crate::cdp::{self, BrowserConfig, CdpConnection};
 use crate::snapshot::{self, SnapshotOptions};
 
 const WAIT_SELECTOR_SCRIPT_TEMPLATE: &str = r#"new Promise((resolve, reject) => {
@@ -13,13 +13,13 @@ const WAIT_SELECTOR_SCRIPT_TEMPLATE: &str = r#"new Promise((resolve, reject) => 
     check();
 })"#;
 
-pub async fn cmd_open(port: u16, url: String, json: bool) -> Result<()> {
+pub async fn cmd_open(config: &BrowserConfig, url: String, json: bool) -> Result<()> {
     let url = if url.contains("://") {
         url
     } else {
         format!("https://{}", url)
     };
-    let targets = cdp::get_targets(port).await?;
+    let targets = cdp::get_targets(config).await?;
     let any_target = targets.first().context("No browser targets")?;
     let ws_url = any_target.webSocketDebuggerUrl.as_ref().unwrap();
     let mut cdp = CdpConnection::connect(ws_url).await?;
@@ -43,15 +43,15 @@ pub async fn cmd_open(port: u16, url: String, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_simple_page(port: u16, method: &str, label: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+pub async fn cmd_simple_page(config: &BrowserConfig, method: &str, label: &str) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     cdp.send(method, serde_json::json!({})).await?;
     println!("✓ {}", label);
     Ok(())
 }
 
-pub async fn cmd_click(port: u16, selector: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+pub async fn cmd_click(config: &BrowserConfig, selector: &str) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     let script = format!(
         r#"(() => {{
             const el = document.querySelector({});
@@ -66,8 +66,13 @@ pub async fn cmd_click(port: u16, selector: &str) -> Result<()> {
     Ok(())
 }
 
-async fn set_input_value(port: u16, selector: &str, text: &str, append: bool) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+async fn set_input_value(
+    config: &BrowserConfig,
+    selector: &str,
+    text: &str,
+    append: bool,
+) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     if !append && is_file_input(&mut cdp, selector).await? {
         set_file_input_files(&mut cdp, selector, &[text.to_string()]).await?;
         return Ok(());
@@ -91,24 +96,24 @@ async fn set_input_value(port: u16, selector: &str, text: &str, append: bool) ->
     Ok(())
 }
 
-pub async fn cmd_type(port: u16, selector: &str, text: &str) -> Result<()> {
-    set_input_value(port, selector, text, true).await?;
+pub async fn cmd_type(config: &BrowserConfig, selector: &str, text: &str) -> Result<()> {
+    set_input_value(config, selector, text, true).await?;
     println!("✓ Typed");
     Ok(())
 }
 
-pub async fn cmd_fill(port: u16, selector: &str, text: &str) -> Result<()> {
-    set_input_value(port, selector, text, false).await?;
+pub async fn cmd_fill(config: &BrowserConfig, selector: &str, text: &str) -> Result<()> {
+    set_input_value(config, selector, text, false).await?;
     println!("✓ Filled");
     Ok(())
 }
 
-pub async fn cmd_attach(port: u16, selector: &str, files: &[String]) -> Result<()> {
+pub async fn cmd_attach(config: &BrowserConfig, selector: &str, files: &[String]) -> Result<()> {
     if files.is_empty() {
         return Err(anyhow!("At least one file path is required"));
     }
 
-    let mut cdp = cdp::connect_active(port).await?;
+    let mut cdp = cdp::connect_active(config).await?;
     if !is_file_input(&mut cdp, selector).await? {
         return Err(anyhow!("Element is not an input[type=file]"));
     }
@@ -198,8 +203,8 @@ async fn set_file_input_files(
     Ok(())
 }
 
-pub async fn cmd_press(port: u16, key: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+pub async fn cmd_press(config: &BrowserConfig, key: &str) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     cdp.send(
         "Input.dispatchKeyEvent",
         serde_json::json!({ "type": "keyDown", "key": key }),
@@ -214,8 +219,8 @@ pub async fn cmd_press(port: u16, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_screenshot(port: u16, path: &str, full: bool) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+pub async fn cmd_screenshot(config: &BrowserConfig, path: &str, full: bool) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     let mut params = serde_json::json!({ "format": "jpeg", "quality": 15 });
     if full {
         params["captureBeyondViewport"] = serde_json::json!(true);
@@ -233,8 +238,8 @@ pub async fn cmd_screenshot(port: u16, path: &str, full: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_eval(port: u16, script: &str, json: bool) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+pub async fn cmd_eval(config: &BrowserConfig, script: &str, json: bool) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
     let result = cdp.eval(script).await?;
     if json {
         println!("{}", serde_json::to_string(&result)?);
@@ -244,33 +249,15 @@ pub async fn cmd_eval(port: u16, script: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_snapshot(
-    port: u16,
-    interactive: bool,
-    compact: bool,
-    react: bool,
-    depth: Option<usize>,
-    filter: Option<String>,
-    full: bool,
-    mini: bool,
-) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
-    let opts = SnapshotOptions {
-        interactive,
-        compact,
-        react,
-        max_depth: depth,
-        filter,
-        full,
-        mini,
-    };
-    let output = snapshot::take_snapshot(&mut cdp, &opts).await?;
+pub async fn cmd_snapshot(config: &BrowserConfig, options: SnapshotOptions) -> Result<()> {
+    let mut cdp = cdp::connect_active(config).await?;
+    let output = snapshot::take_snapshot(&mut cdp, &options).await?;
     println!("{}", output);
     Ok(())
 }
 
-pub async fn cmd_get(port: u16, what: &crate::GetCommand, json: bool) -> Result<()> {
-    let targets = cdp::get_targets(port).await?;
+pub async fn cmd_get(config: &BrowserConfig, what: &crate::GetCommand, json: bool) -> Result<()> {
+    let targets = cdp::get_targets(config).await?;
     let target = cdp::find_active_target(&targets)?;
     let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
 
@@ -355,8 +342,12 @@ async fn print_eval_str(cdp: &mut CdpConnection, script: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn cmd_tabs(port: u16, action: &crate::TabsCommand, json: bool) -> Result<()> {
-    let targets = cdp::get_targets(port).await?;
+pub async fn cmd_tabs(
+    config: &BrowserConfig,
+    action: &crate::TabsCommand,
+    json: bool,
+) -> Result<()> {
+    let targets = cdp::get_targets(config).await?;
 
     match action {
         crate::TabsCommand::List => print_tab_list(&targets, json)?,
@@ -427,12 +418,12 @@ async fn connect_target_session(targets: &[cdp::TargetJson]) -> Result<CdpConnec
 }
 
 pub async fn cmd_wait(
-    port: u16,
+    config: &BrowserConfig,
     target: Option<String>,
     url: Option<String>,
     load: Option<String>,
 ) -> Result<()> {
-    let mut cdp = cdp::connect_active(port).await?;
+    let mut cdp = cdp::connect_active(config).await?;
 
     if let Some(ms) = target.as_ref().and_then(|s| s.parse::<u64>().ok()) {
         tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;

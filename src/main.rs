@@ -7,6 +7,7 @@ mod snapshot_tests;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 const DEFAULT_CDP_PORT: u16 = 9222;
 
@@ -21,6 +22,10 @@ struct Cli {
     /// Output as JSON
     #[arg(long)]
     json: bool,
+
+    /// Chromium user data directory used when auto-starting the browser
+    #[arg(long)]
+    user_data_dir: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -172,25 +177,32 @@ pub enum TabsCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let port = cli.port;
+    let browser = cdp::BrowserConfig {
+        port: cli.port,
+        user_data_dir: cli.user_data_dir,
+    };
     let json = cli.json;
 
     match cli.command {
-        Command::Open { url } => commands::cmd_open(port, url, json).await,
-        Command::Back => commands::cmd_simple_page(port, "Page.goBack", "Back").await,
-        Command::Forward => commands::cmd_simple_page(port, "Page.goForward", "Forward").await,
-        Command::Reload => commands::cmd_simple_page(port, "Page.reload", "Reloaded").await,
-        Command::Close => commands::cmd_simple_page(port, "Page.close", "Closed").await,
-        Command::Click { selector } => commands::cmd_click(port, &selector).await,
-        Command::Type { selector, text } => commands::cmd_type(port, &selector, &text).await,
-        Command::Fill { selector, text } => commands::cmd_fill(port, &selector, &text).await,
-        Command::Attach { selector, files } => commands::cmd_attach(port, &selector, &files).await,
-        Command::Press { key } => commands::cmd_press(port, &key).await,
-        Command::Screenshot { path, full } => commands::cmd_screenshot(port, &path, full).await,
-        Command::Eval { script } => commands::cmd_eval(port, &script, json).await,
-        Command::Get { what } => commands::cmd_get(port, &what, json).await,
-        Command::Tabs { action } => commands::cmd_tabs(port, &action, json).await,
-        Command::Wait { target, url, load } => commands::cmd_wait(port, target, url, load).await,
+        Command::Open { url } => commands::cmd_open(&browser, url, json).await,
+        Command::Back => commands::cmd_simple_page(&browser, "Page.goBack", "Back").await,
+        Command::Forward => commands::cmd_simple_page(&browser, "Page.goForward", "Forward").await,
+        Command::Reload => commands::cmd_simple_page(&browser, "Page.reload", "Reloaded").await,
+        Command::Close => commands::cmd_simple_page(&browser, "Page.close", "Closed").await,
+        Command::Click { selector } => commands::cmd_click(&browser, &selector).await,
+        Command::Type { selector, text } => commands::cmd_type(&browser, &selector, &text).await,
+        Command::Fill { selector, text } => commands::cmd_fill(&browser, &selector, &text).await,
+        Command::Attach { selector, files } => {
+            commands::cmd_attach(&browser, &selector, &files).await
+        }
+        Command::Press { key } => commands::cmd_press(&browser, &key).await,
+        Command::Screenshot { path, full } => commands::cmd_screenshot(&browser, &path, full).await,
+        Command::Eval { script } => commands::cmd_eval(&browser, &script, json).await,
+        Command::Get { what } => commands::cmd_get(&browser, &what, json).await,
+        Command::Tabs { action } => commands::cmd_tabs(&browser, &action, json).await,
+        Command::Wait { target, url, load } => {
+            commands::cmd_wait(&browser, target, url, load).await
+        }
         Command::Snapshot {
             interactive,
             compact,
@@ -200,9 +212,17 @@ async fn main() -> Result<()> {
             full,
             mini,
         } => {
-            commands::cmd_snapshot(port, interactive, compact, react, depth, filter, full, mini)
-                .await
+            let options = snapshot::SnapshotOptions {
+                interactive,
+                compact,
+                react,
+                max_depth: depth,
+                filter,
+                full,
+                mini,
+            };
+            commands::cmd_snapshot(&browser, options).await
         }
-        Command::Runtime { action } => runtime::cmd_runtime(port, &action, json).await,
+        Command::Runtime { action } => runtime::cmd_runtime(&browser, &action, json).await,
     }
 }

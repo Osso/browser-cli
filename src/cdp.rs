@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tokio_tungstenite::tungstenite::Message;
@@ -231,22 +232,35 @@ fn wayland_socket_names(_runtime_dir: &Path) -> Vec<String> {
     Vec::new()
 }
 
-fn chrome_launch_args(port: u16, wayland_display: Option<&str>) -> Vec<String> {
-    let data_dir = format!("/tmp/browser-cli-chrome-{}", port);
+pub struct BrowserConfig {
+    pub port: u16,
+    pub user_data_dir: Option<PathBuf>,
+}
+
+fn chrome_launch_args(
+    port: u16,
+    wayland_display: Option<&str>,
+    user_data_dir: Option<&Path>,
+) -> Vec<OsString> {
+    let data_dir = user_data_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/browser-cli-chrome-{}", port)));
+    let mut user_data_argument = OsString::from("--user-data-dir=");
+    user_data_argument.push(data_dir.as_os_str());
     let mut args = vec![
-        format!("--remote-debugging-port={}", port),
-        format!("--user-data-dir={}", data_dir),
-        "--no-first-run".to_string(),
-        "--no-default-browser-check".to_string(),
+        OsString::from(format!("--remote-debugging-port={}", port)),
+        user_data_argument,
+        OsString::from("--no-first-run"),
+        OsString::from("--no-default-browser-check"),
         // Suppress the "Restore pages? Chrome didn't shut down correctly" bubble
         // that appears when the profile was left dirty by a prior unclean exit.
-        "--disable-session-crashed-bubble".to_string(),
-        "--hide-crash-restore-bubble".to_string(),
+        OsString::from("--disable-session-crashed-bubble"),
+        OsString::from("--hide-crash-restore-bubble"),
     ];
     if wayland_display.is_some_and(|display| !display.is_empty()) {
-        args.push("--ozone-platform=wayland".to_string());
+        args.push(OsString::from("--ozone-platform=wayland"));
     }
-    args.push("about:blank".to_string());
+    args.push(OsString::from("about:blank"));
     args
 }
 
@@ -258,7 +272,7 @@ fn apply_wayland_session(command: &mut Command, session: Option<&WaylandSession>
     }
 }
 
-fn start_chrome(port: u16) -> Result<()> {
+fn start_chrome(config: &BrowserConfig) -> Result<()> {
     let chrome = find_chrome_executable().context("Chrome not found in PATH")?;
     let mut command = Command::new(chrome);
     detach_from_parent(&mut command);
@@ -268,10 +282,11 @@ fn start_chrome(port: u16) -> Result<()> {
 
     command
         .args(chrome_launch_args(
-            port,
+            config.port,
             wayland_session
                 .as_ref()
                 .map(|session| session.display.as_str()),
+            config.user_data_dir.as_deref(),
         ))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -332,26 +347,29 @@ pub async fn create_new_tab(port: u16, url: &str) -> Result<TargetJson> {
     Ok(target)
 }
 
-pub async fn get_targets(port: u16) -> Result<Vec<TargetJson>> {
-    if !chrome_is_running(port).await {
-        eprintln!("Starting Chrome with remote debugging on port {}...", port);
-        start_chrome(port)?;
+pub async fn get_targets(config: &BrowserConfig) -> Result<Vec<TargetJson>> {
+    if !chrome_is_running(config.port).await {
+        eprintln!(
+            "Starting Chrome with remote debugging on port {}...",
+            config.port
+        );
+        start_chrome(config)?;
 
         for _ in 0..50 {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            if chrome_is_running(port).await {
+            if chrome_is_running(config.port).await {
                 break;
             }
         }
 
-        if !chrome_is_running(port).await {
+        if !chrome_is_running(config.port).await {
             anyhow::bail!("Chrome started but failed to connect after 5 seconds");
         }
     }
 
-    let mut targets = get_all_targets(port).await?;
+    let mut targets = get_all_targets(config.port).await?;
     if targets.is_empty() {
-        let new_target = create_new_tab(port, "about:blank").await?;
+        let new_target = create_new_tab(config.port, "about:blank").await?;
         targets.push(new_target);
     }
     Ok(targets)
@@ -366,8 +384,8 @@ pub fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
 }
 
 /// Connect CDP to the active target
-pub async fn connect_active(port: u16) -> Result<CdpConnection> {
-    let targets = get_targets(port).await?;
+pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
+    let targets = get_targets(config).await?;
     let target = find_active_target(&targets)?;
     let ws_url = target.webSocketDebuggerUrl.as_ref().unwrap();
     CdpConnection::connect(ws_url).await
@@ -379,6 +397,8 @@ mod tests {
         WaylandSession, apply_wayland_session, chrome_launch_args, discover_wayland_session_with,
         resolve_wayland_display, select_wayland_runtime_dir, wayland_socket_names,
     };
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::os::unix::net::UnixListener;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -395,34 +415,75 @@ mod tests {
 
     #[test]
     fn chrome_launch_args_include_debug_port_and_profile() {
-        let args = chrome_launch_args(9222, None);
+        let args = chrome_launch_args(9222, None, None);
 
-        assert!(args.contains(&"--remote-debugging-port=9222".to_string()));
-        assert!(args.contains(&"--user-data-dir=/tmp/browser-cli-chrome-9222".to_string()));
-        assert!(args.contains(&"--no-first-run".to_string()));
-        assert!(args.contains(&"--no-default-browser-check".to_string()));
-        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+        assert!(args.contains(&OsString::from("--remote-debugging-port=9222")));
+        assert!(args.contains(&OsString::from(
+            "--user-data-dir=/tmp/browser-cli-chrome-9222"
+        )));
+        assert!(args.contains(&OsString::from("--no-first-run")));
+        assert!(args.contains(&OsString::from("--no-default-browser-check")));
+        assert_eq!(
+            args.last().and_then(|arg| arg.to_str()),
+            Some("about:blank")
+        );
+    }
+
+    #[test]
+    fn chrome_launch_args_use_explicit_profile() {
+        let args = chrome_launch_args(9222, None, Some(Path::new("/home/osso/.config/chromium")));
+
+        assert!(args.contains(&OsString::from(
+            "--user-data-dir=/home/osso/.config/chromium"
+        )));
+        assert!(!args.contains(&OsString::from(
+            "--user-data-dir=/tmp/browser-cli-chrome-9222"
+        )));
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_non_utf8_profile_path() {
+        let path = PathBuf::from(OsString::from_vec(b"/tmp/profile-\xff".to_vec()));
+
+        let args = chrome_launch_args(9222, None, Some(&path));
+        let profile_arg = args
+            .iter()
+            .find(|arg| arg.as_os_str().as_bytes().starts_with(b"--user-data-dir="))
+            .expect("profile argument");
+
+        assert_eq!(
+            profile_arg.as_os_str().as_bytes(),
+            b"--user-data-dir=/tmp/profile-\xff"
+        );
     }
 
     #[test]
     fn chrome_launch_args_use_native_wayland_when_available() {
-        let args = chrome_launch_args(9222, Some("wayland-1"));
+        let args = chrome_launch_args(9222, Some("wayland-1"), None);
 
-        assert!(args.contains(&"--ozone-platform=wayland".to_string()));
+        assert!(args.contains(&OsString::from("--ozone-platform=wayland")));
     }
 
     #[test]
     fn chrome_launch_args_preserve_x11_without_wayland() {
-        let args = chrome_launch_args(9222, None);
+        let args = chrome_launch_args(9222, None, None);
 
-        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().starts_with("--ozone-platform="))
+        );
     }
 
     #[test]
     fn chrome_launch_args_preserve_x11_for_empty_wayland_display() {
-        let args = chrome_launch_args(9222, Some(""));
+        let args = chrome_launch_args(9222, Some(""), None);
 
-        assert!(!args.iter().any(|arg| arg.starts_with("--ozone-platform=")));
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.to_string_lossy().starts_with("--ozone-platform="))
+        );
     }
 
     #[test]

@@ -4,23 +4,27 @@ use tokio::time::{Duration, Instant, timeout};
 
 use crate::cdp;
 
-pub async fn cmd_runtime(port: u16, action: &crate::RuntimeCommand, json: bool) -> Result<()> {
+pub async fn cmd_runtime(
+    config: &cdp::BrowserConfig,
+    action: &crate::RuntimeCommand,
+    json: bool,
+) -> Result<()> {
     let (kind, reload, wait_ms) = match action {
         crate::RuntimeCommand::Console { reload, wait_ms } => ("console", *reload, *wait_ms),
         crate::RuntimeCommand::Exceptions { reload, wait_ms } => ("exceptions", *reload, *wait_ms),
     };
-    let events = collect_runtime_events(port, kind, reload, wait_ms).await?;
+    let events = collect_runtime_events(config, kind, reload, wait_ms).await?;
     print_runtime_events(kind, &events, json)?;
     Ok(())
 }
 
 async fn collect_runtime_events(
-    port: u16,
+    config: &cdp::BrowserConfig,
     kind: &str,
     reload: bool,
     wait_ms: u64,
 ) -> Result<Vec<Value>> {
-    let mut cdp = cdp::connect_active(port).await?;
+    let mut cdp = cdp::connect_active(config).await?;
     cdp.send("Runtime.enable", serde_json::json!({})).await?;
     if reload {
         cdp.send("Page.reload", serde_json::json!({})).await?;
