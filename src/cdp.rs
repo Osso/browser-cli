@@ -478,10 +478,10 @@ mod tests {
 
     #[test]
     fn chrome_launch_args_use_explicit_profile() {
-        let args = chrome_launch_args(9222, None, Some(Path::new("/home/osso/.config/chromium")));
+        let args = chrome_launch_args(9222, None, Some(Path::new("/tmp/custom-profile")));
 
         assert!(args.contains(&OsString::from(
-            "--user-data-dir=/home/osso/.config/chromium"
+            "--user-data-dir=/tmp/custom-profile"
         )));
         assert!(!args.contains(&OsString::from(
             "--user-data-dir=/home/osso/.config/chromium"
