@@ -23,23 +23,26 @@ cargo install --git https://github.com/Osso/browser-cli
 
 ## Prerequisites
 
-Chrome must be running with remote debugging enabled:
+`browser-cli` connects to an existing Chrome/Chromium instance with remote
+debugging enabled when one is available. If none is listening, it starts the
+browser itself. To start one manually:
 
 ```bash
 google-chrome-stable --remote-debugging-port=9222
 ```
 
-When `browser-cli` starts Chromium itself, it uses
-`/home/osso/.config/chromium`. Use the global `--user-data-dir PATH` option to
-select another profile:
+When `browser-cli` starts a browser itself, it uses
+`/home/osso/.config/chromium` when `--user-data-dir` is omitted. Use the global
+`--user-data-dir PATH` option to select another profile:
 
 ```bash
 browser-cli --user-data-dir ~/.local/share/browser-cli/profile open https://example.com
 ```
 
-Remote debugging exposes the selected profile's authenticated browser state to
-automation. Fully close every Chromium process using the profile before launch;
-concurrent access can corrupt or lock it.
+Remote debugging exposes the connected profile's authenticated browser state
+to automation. Before asking `browser-cli` to auto-start a browser with a
+profile, fully close every Chromium process using that profile; concurrent
+access can corrupt or lock it.
 
 When `browser-cli` starts Chrome itself, it uses native Chromium Wayland when
 `WAYLAND_DISPLAY` is non-empty. If desktop variables are missing (for example,
