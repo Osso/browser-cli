@@ -29,18 +29,17 @@ Chrome must be running with remote debugging enabled:
 google-chrome-stable --remote-debugging-port=9222
 ```
 
-When `browser-cli` starts Chrome itself, it uses a temporary user-data directory
-by default: `/tmp/browser-cli-chrome-<port>`. Use the global
-`--user-data-dir PATH` option to select a persistent automation profile instead:
+When `browser-cli` starts Chromium itself, it uses
+`/home/osso/.config/chromium`. Use the global `--user-data-dir PATH` option to
+select another profile:
 
 ```bash
 browser-cli --user-data-dir ~/.local/share/browser-cli/profile open https://example.com
 ```
 
 Remote debugging exposes the selected profile's authenticated browser state to
-automation. Prefer a dedicated profile. If primary-profile access is explicitly
-required, fully close every Chromium process using that profile before launch;
-concurrent access can corrupt or lock the profile.
+automation. Fully close every Chromium process using the profile before launch;
+concurrent access can corrupt or lock it.
 
 When `browser-cli` starts Chrome itself, it uses native Chromium Wayland when
 `WAYLAND_DISPLAY` is non-empty. If desktop variables are missing (for example,
@@ -134,9 +133,9 @@ browser-cli --json ...                 # JSON output
 browser-cli --user-data-dir PATH ...   # Chromium profile for auto-started browser
 ```
 
-When `--user-data-dir` is omitted, an auto-started browser uses the temporary
-`/tmp/browser-cli-chrome-<port>` profile. Never use the same user-data directory
-for concurrently running Chromium processes.
+When `--user-data-dir` is omitted, an auto-started browser uses
+`/home/osso/.config/chromium`. Never use the same user-data directory for
+concurrently running Chromium processes.
 
 ## Example
 

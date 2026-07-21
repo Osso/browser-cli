@@ -273,6 +273,8 @@ fn wayland_socket_names(_runtime_dir: &Path) -> Vec<String> {
     Vec::new()
 }
 
+const DEFAULT_CHROMIUM_USER_DATA_DIR: &str = "/home/osso/.config/chromium";
+
 pub struct BrowserConfig {
     pub port: u16,
     pub user_data_dir: Option<PathBuf>,
@@ -285,7 +287,7 @@ fn chrome_launch_args(
 ) -> Vec<OsString> {
     let data_dir = user_data_dir
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from(format!("/tmp/browser-cli-chrome-{}", port)));
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CHROMIUM_USER_DATA_DIR));
     let mut user_data_argument = OsString::from("--user-data-dir=");
     user_data_argument.push(data_dir.as_os_str());
     let mut args = vec![
@@ -459,12 +461,12 @@ mod tests {
     }
 
     #[test]
-    fn chrome_launch_args_include_debug_port_and_profile() {
+    fn chrome_launch_args_use_default_chromium_profile() {
         let args = chrome_launch_args(9222, None, None);
 
         assert!(args.contains(&OsString::from("--remote-debugging-port=9222")));
         assert!(args.contains(&OsString::from(
-            "--user-data-dir=/tmp/browser-cli-chrome-9222"
+            "--user-data-dir=/home/osso/.config/chromium"
         )));
         assert!(args.contains(&OsString::from("--no-first-run")));
         assert!(args.contains(&OsString::from("--no-default-browser-check")));
@@ -482,7 +484,7 @@ mod tests {
             "--user-data-dir=/home/osso/.config/chromium"
         )));
         assert!(!args.contains(&OsString::from(
-            "--user-data-dir=/tmp/browser-cli-chrome-9222"
+            "--user-data-dir=/home/osso/.config/chromium"
         )));
     }
 
