@@ -45,7 +45,7 @@ pub fn fill(socket: &Path, scope: &str, target_id: &str) -> Result<usize> {
         request_id: "browser-cli",
         operation: Operation::BrowserFill(BrowserFill { scope, target_id }),
     };
-    let bytes = rmp_serde::to_vec(&request)?;
+    let bytes = rmp_serde::to_vec_named(&request)?;
     let mut stream = UnixStream::connect(socket)
         .with_context(|| format!("connect broker socket {}", socket.display()))?;
     stream.write_all(&bytes)?;
@@ -126,7 +126,7 @@ mod tests {
                 payload: BrokerPayload::BrowserFilled { filled_count: 2 },
             };
             stream
-                .write_all(&rmp_serde::to_vec(&response).unwrap())
+                .write_all(&rmp_serde::to_vec_named(&response).unwrap())
                 .unwrap();
         });
 
