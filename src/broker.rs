@@ -11,6 +11,7 @@ struct Request<'a> {
     operation: Operation<'a>,
 }
 #[derive(Serialize)]
+#[serde(tag = "type", content = "parameters", rename_all = "snake_case")]
 enum Operation<'a> {
     BrowserFill(BrowserFill<'a>),
 }
@@ -28,6 +29,7 @@ struct Response {
     payload: Payload,
 }
 #[derive(Deserialize)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 enum Payload {
     BrowserFilled { filled_count: usize },
     Error(ErrorResponse),
@@ -71,6 +73,7 @@ mod tests {
     }
 
     #[derive(Deserialize)]
+    #[serde(tag = "type", content = "parameters", rename_all = "snake_case")]
     enum BrokerOperation {
         BrowserFill(BrokerBrowserFill),
     }
@@ -89,6 +92,7 @@ mod tests {
     }
 
     #[derive(Serialize)]
+    #[serde(tag = "type", content = "data", rename_all = "snake_case")]
     enum BrokerPayload {
         BrowserFilled { filled_count: usize },
     }
