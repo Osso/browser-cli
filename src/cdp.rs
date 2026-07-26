@@ -429,6 +429,11 @@ pub fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
         .context("No pages found. Open a tab in Chrome first.")
 }
 
+pub async fn active_target_id(config: &BrowserConfig) -> Result<String> {
+    let targets = get_targets(config).await?;
+    Ok(find_active_target(&targets)?.id.clone())
+}
+
 /// Connect CDP to the active target
 pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
     let targets = get_targets(config).await?;

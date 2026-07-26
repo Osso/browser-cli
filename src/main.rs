@@ -1,3 +1,4 @@
+mod broker;
 mod cdp;
 mod commands;
 mod runtime;
@@ -33,6 +34,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Fill approved credentials through Secrets Broker
+    BrokerFill {
+        #[arg(long)]
+        scope: String,
+        #[arg(long, default_value = "/run/secrets-broker.sock")]
+        socket: PathBuf,
+    },
     /// Navigate to a URL
     #[command(visible_alias = "goto", visible_alias = "navigate")]
     Open { url: String },
@@ -184,6 +192,12 @@ async fn main() -> Result<()> {
     let json = cli.json;
 
     match cli.command {
+        Command::BrokerFill { scope, socket } => {
+            let target_id = cdp::active_target_id(&browser).await?;
+            let filled = broker::fill(&socket, &scope, &target_id)?;
+            println!("Filled {filled} credential fields");
+            Ok(())
+        }
         Command::Open { url } => commands::cmd_open(&browser, url, json).await,
         Command::Back => commands::cmd_simple_page(&browser, "Page.goBack", "Back").await,
         Command::Forward => commands::cmd_simple_page(&browser, "Page.goForward", "Forward").await,
