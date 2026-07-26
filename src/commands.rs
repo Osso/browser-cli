@@ -89,10 +89,6 @@ fn mouse_click_events(point: (f64, f64)) -> Vec<(&'static str, serde_json::Value
     let (x, y) = point;
     vec![
         (
-            "mouseMoved",
-            serde_json::json!({ "type": "mouseMoved", "x": x, "y": y }),
-        ),
-        (
             "mousePressed",
             serde_json::json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
         ),
@@ -500,7 +496,7 @@ mod tests {
                 .unwrap();
         assert_eq!((30.0, 30.0), point);
         assert_eq!(
-            vec!["mouseMoved", "mousePressed", "mouseReleased"],
+            vec!["mousePressed", "mouseReleased"],
             mouse_click_events(point)
                 .iter()
                 .map(|(event, _)| *event)

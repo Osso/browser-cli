@@ -20,6 +20,7 @@ Broker integration is deliberately credential-free: browser-cli sends only a nam
 - Uses WebSocket for CDP commands (tokio-tungstenite)
 - `CdpConnection` struct manages WebSocket and message IDs
 - Commands use CSS selectors for element targeting
+- `click` rejects zero-size targets and dispatches real CDP pointer events; do not replace it with DOM `.click()` for custom controls
 - Screenshots output JPEG quality 15
 
 ## CDP Communication
@@ -33,7 +34,8 @@ cdp.eval(expression)            // Shorthand for Runtime.evaluate
 Key CDP methods used:
 - `Page.navigate`, `Page.goBack`, `Page.goForward`, `Page.reload`, `Page.close`
 - `Page.captureScreenshot`
-- `Runtime.evaluate` (for DOM interactions via JavaScript)
+- `Runtime.evaluate` (for DOM inspection and value injection)
+- `Input.dispatchMouseEvent` (for real pointer clicks at visible element centers)
 - `Input.dispatchKeyEvent`
 - `Target.createTarget`, `Target.closeTarget`, `Target.activateTarget`
 

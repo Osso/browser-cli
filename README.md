@@ -65,6 +65,8 @@ browser-cli broker-fill --scope browser:citi
 
 `broker-unlock` requests human approval through authd. `broker-fill` identifies the active CDP target and sends only the scope and target ID to the broker. The broker verifies the target's exact registered origin, fills the registered selectors through CDP, and returns only the number of fields filled. It does not return credential values or submit the form. Use `--socket PATH` only when the broker is deployed at a different socket path.
 
+`click` resolves the target rectangle, rejects missing or zero-size elements, and dispatches `mouseMoved`, `mousePressed`, and `mouseReleased` through CDP at the element center. This supports custom controls such as browser-rendered listboxes that do not respond to DOM `.click()`.
+
 Deploy this revision with:
 
 ```bash
@@ -88,7 +90,7 @@ browser-cli close            # Close tab (aliases: quit, exit)
 ### Interactions
 
 ```bash
-browser-cli click <selector>           # Click element
+browser-cli click <selector>           # Real CDP pointer click at visible element center
 browser-cli type <selector> <text>     # Append text to element
 browser-cli fill <selector> <text>     # Clear and fill element
 browser-cli attach <selector> <file>   # Attach file(s) to input[type=file]
