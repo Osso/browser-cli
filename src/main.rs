@@ -34,6 +34,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Request approval to unlock a Secrets Broker scope
+    BrokerUnlock {
+        #[arg(long)]
+        scope: String,
+        #[arg(long, default_value = "/run/secrets-broker/broker.sock")]
+        socket: PathBuf,
+    },
     /// Fill approved credentials through Secrets Broker
     BrokerFill {
         #[arg(long)]
@@ -192,6 +199,11 @@ async fn main() -> Result<()> {
     let json = cli.json;
 
     match cli.command {
+        Command::BrokerUnlock { scope, socket } => {
+            let scopes = broker::unlock(&socket, &scope)?;
+            println!("Unlocked {}", scopes.join(", "));
+            Ok(())
+        }
         Command::BrokerFill { scope, socket } => {
             let target_id = cdp::active_target_id(&browser).await?;
             let filled = broker::fill(&socket, &scope, &target_id)?;

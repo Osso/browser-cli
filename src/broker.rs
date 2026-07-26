@@ -13,7 +13,12 @@ struct Request<'a> {
 #[derive(Serialize)]
 #[serde(tag = "type", content = "parameters", rename_all = "snake_case")]
 enum Operation<'a> {
+    Unlock(ScopeRequest<'a>),
     BrowserFill(BrowserFill<'a>),
+}
+#[derive(Serialize)]
+struct ScopeRequest<'a> {
+    scope: &'a str,
 }
 #[derive(Serialize)]
 struct BrowserFill<'a> {
@@ -31,6 +36,7 @@ struct Response {
 #[derive(Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 enum Payload {
+    Unlocked { scopes: Vec<String> },
     BrowserFilled { filled_count: usize },
     Error(ErrorResponse),
 }
@@ -39,23 +45,41 @@ struct ErrorResponse {
     message: String,
 }
 
+pub fn unlock(socket: &Path, scope: &str) -> Result<Vec<String>> {
+    let request = Request {
+        version: 1,
+        request_id: "browser-cli",
+        operation: Operation::Unlock(ScopeRequest { scope }),
+    };
+    match exchange(socket, &request)? {
+        Payload::Unlocked { scopes } => Ok(scopes),
+        Payload::Error(error) => bail!("broker denied unlock: {}", error.message),
+        _ => bail!("broker returned an unexpected unlock response"),
+    }
+}
+
 pub fn fill(socket: &Path, scope: &str, target_id: &str) -> Result<usize> {
     let request = Request {
         version: 1,
         request_id: "browser-cli",
         operation: Operation::BrowserFill(BrowserFill { scope, target_id }),
     };
-    let bytes = rmp_serde::to_vec_named(&request)?;
+    match exchange(socket, &request)? {
+        Payload::BrowserFilled { filled_count } => Ok(filled_count),
+        Payload::Error(error) => bail!("broker denied fill: {}", error.message),
+        _ => bail!("broker returned an unexpected fill response"),
+    }
+}
+
+fn exchange(socket: &Path, request: &Request<'_>) -> Result<Payload> {
+    let bytes = rmp_serde::to_vec_named(request)?;
     let mut stream = UnixStream::connect(socket)
         .with_context(|| format!("connect broker socket {}", socket.display()))?;
     stream.write_all(&bytes)?;
     stream.shutdown(std::net::Shutdown::Write)?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response)?;
-    match rmp_serde::from_slice::<Response>(&response)?.payload {
-        Payload::BrowserFilled { filled_count } => Ok(filled_count),
-        Payload::Error(error) => bail!("broker denied fill: {}", error.message),
-    }
+    Ok(rmp_serde::from_slice::<Response>(&response)?.payload)
 }
 
 #[cfg(test)]
