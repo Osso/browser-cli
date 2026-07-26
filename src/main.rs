@@ -38,7 +38,7 @@ enum Command {
     BrokerFill {
         #[arg(long)]
         scope: String,
-        #[arg(long, default_value = "/run/secrets-broker.sock")]
+        #[arg(long, default_value = "/run/secrets-broker/broker.sock")]
         socket: PathBuf,
     },
     /// Navigate to a URL
