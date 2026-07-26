@@ -6,10 +6,13 @@ Rust CLI for browser automation via Chrome DevTools Protocol.
 
 ```
 src/
-  main.rs       - CLI args (clap), CDP communication, command handlers
+  main.rs       - CLI arguments and command dispatch
+  broker.rs     - credential-free Secrets Broker socket client
+  cdp.rs        - CDP target discovery and browser interaction
+  commands.rs   - direct browser command handlers
 ```
 
-Single-file implementation. All logic in main.rs.
+Broker integration is deliberately credential-free: browser-cli sends only a named scope and active CDP target ID to Secrets Broker.
 
 ## Architecture
 
@@ -33,6 +36,17 @@ Key CDP methods used:
 - `Runtime.evaluate` (for DOM interactions via JavaScript)
 - `Input.dispatchKeyEvent`
 - `Target.createTarget`, `Target.closeTarget`, `Target.activateTarget`
+
+## Secrets Broker integration
+
+- `broker-unlock --scope browser:citi` requests human approval through authd.
+- `broker-fill --scope browser:citi` sends only the scope and active target ID to `/run/secrets-broker/broker.sock`.
+- The broker verifies the exact registered origin, fills approved selectors through CDP, and returns only filled-field metadata.
+- Browser-cli never opens the credential store, accepts credential values for this path, or submits the form during broker fill.
+
+## Deployment
+
+`./deploy.sh` builds the release binary, installs `$HOME/.cargo/bin/browser-cli`, and verifies the installed hash matches the build artifact.
 
 ## Adding a new command
 

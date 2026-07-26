@@ -54,6 +54,25 @@ reach keyring and native desktop integrations. An explicit non-empty
 `WAYLAND_DISPLAY` takes precedence. Otherwise, a non-empty `DISPLAY` preserves
 X11 behavior and disables socket discovery.
 
+## Secrets Broker integration
+
+`browser-cli` can request a broker-approved browser credential fill without opening the credential store or accepting credential values as arguments. The broker service is installed at `/usr/bin/secrets-broker` and listens on `/run/secrets-broker/broker.sock`.
+
+```bash
+browser-cli broker-unlock --scope browser:citi
+browser-cli broker-fill --scope browser:citi
+```
+
+`broker-unlock` requests human approval through authd. `broker-fill` identifies the active CDP target and sends only the scope and target ID to the broker. The broker verifies the target's exact registered origin, fills the registered selectors through CDP, and returns only the number of fields filled. It does not return credential values or submit the form. Use `--socket PATH` only when the broker is deployed at a different socket path.
+
+Deploy this revision with:
+
+```bash
+./deploy.sh
+```
+
+The script builds the release binary, installs it at `$HOME/.cargo/bin/browser-cli`, and verifies the installed hash matches the build artifact.
+
 ## Usage
 
 ### Navigation
