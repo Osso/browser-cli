@@ -63,7 +63,24 @@ browser-cli broker-unlock --scope browser:citi
 browser-cli broker-fill --scope browser:citi
 ```
 
-`broker-unlock` requests human approval through authd. `broker-fill` identifies the active CDP target and sends only the scope and target ID to the broker. The broker verifies the target's exact registered origin, fills the registered selectors through CDP, and returns only the number of fields filled. It does not return credential values or submit the form. Use `--socket PATH` only when the broker is deployed at a different socket path.
+For automatic scope selection, create `~/.config/browser-cli/credential-scopes.json` with mode `0600`. The file maps exact lowercase hostnames to broker scopes; it never contains credentials:
+
+```json
+{
+  "online.citi.com": "browser:citi"
+}
+```
+
+Then resolve the active tab's exact HTTPS hostname on every unlock/fill:
+
+```bash
+browser-cli broker-unlock --current-origin
+browser-cli broker-fill --current-origin
+```
+
+`$XDG_CONFIG_HOME/browser-cli/credential-scopes.json` takes precedence when `XDG_CONFIG_HOME` is set. Use `--scope-config PATH` to select another mapping file. Supplying both `--current-origin` and `--scope` requires the explicit scope to match the mapping. Unmapped hosts, insecure URLs, symlinks, non-regular files, files not owned by the current user, and modes other than `0600` fail closed.
+
+`broker-unlock` requests human approval through authd. `broker-fill` revalidates the active origin immediately before sending only the scope and target ID to the broker. The broker verifies the target's registered origin, fills the registered selectors through CDP, and returns only the number of fields filled. It does not return credential values or submit the form; the browser operator identifies and clicks the sign-in control. MFA and CAPTCHA remain user-driven. Use `--socket PATH` only when the broker is deployed at a different socket path.
 
 `click` resolves the target rectangle, rejects missing or zero-size elements, and dispatches `mouseMoved`, `mousePressed`, and `mouseReleased` through CDP at the element center. This supports custom controls such as browser-rendered listboxes that do not respond to DOM `.click()`.
 

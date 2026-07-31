@@ -43,8 +43,11 @@ Key CDP methods used:
 
 - `broker-unlock --scope browser:citi` requests human approval through authd.
 - `broker-fill --scope browser:citi` sends only the scope and active target ID to `/run/secrets-broker/broker.sock`.
+- `--current-origin` resolves the active tab's exact HTTPS hostname through `$XDG_CONFIG_HOME/browser-cli/credential-scopes.json` or `~/.config/browser-cli/credential-scopes.json`.
+- The mapping file is a mode-`0600`, current-user-owned regular JSON file from lowercase exact hostname to broker scope. Never add credentials, wildcards, suffix matching, symlinks, or permissive modes.
+- When `--scope` and `--current-origin` are combined, require equality; re-resolve immediately before fill and fail closed for missing, malformed, insecure, or unmapped state.
 - The broker verifies the exact registered origin, fills approved selectors through CDP, and returns only filled-field metadata.
-- Browser-cli never opens the credential store, accepts credential values for this path, or submits the form during broker fill.
+- Browser-cli never opens the credential store, accepts credential values for this path, or submits the form during broker fill. The agent clicks submit; MFA and CAPTCHA remain user-driven.
 
 ## Deployment
 

@@ -99,6 +99,7 @@ dependencies = [
  "base64",
  "clap",
  "futures",
+ "libc",
  "reqwest",
  "rmp-serde",
  "serde",
