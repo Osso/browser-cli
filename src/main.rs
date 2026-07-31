@@ -245,6 +245,28 @@ async fn unlock_broker_scope(
     explicit_broker_scope(broker_args)
 }
 
+async fn run_broker_unlock(browser: &cdp::BrowserConfig, broker_args: BrokerArgs) -> Result<()> {
+    let scope = unlock_broker_scope(browser, &broker_args).await?;
+    let scopes = broker::unlock(&broker_args.socket, &scope)?;
+    println!("Unlocked {}", scopes.join(", "));
+    Ok(())
+}
+
+async fn run_broker_fill(browser: &cdp::BrowserConfig, broker_args: BrokerArgs) -> Result<()> {
+    let (scope, target_id) = if broker_args.current_origin {
+        let (scope, target) = mapped_broker_scope(browser, &broker_args).await?;
+        (scope, target.id)
+    } else {
+        (
+            explicit_broker_scope(&broker_args)?,
+            cdp::active_target_id(browser).await?,
+        )
+    };
+    let filled = broker::fill(&broker_args.socket, &scope, &target_id)?;
+    println!("Filled {filled} credential fields");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -257,28 +279,10 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::BrokerUnlock {
             broker: broker_args,
-        } => {
-            let scope = unlock_broker_scope(&browser, &broker_args).await?;
-            let scopes = broker::unlock(&broker_args.socket, &scope)?;
-            println!("Unlocked {}", scopes.join(", "));
-            Ok(())
-        }
+        } => run_broker_unlock(&browser, broker_args).await,
         Command::BrokerFill {
             broker: broker_args,
-        } => {
-            let (scope, target_id) = if broker_args.current_origin {
-                let (scope, target) = mapped_broker_scope(&browser, &broker_args).await?;
-                (scope, target.id)
-            } else {
-                (
-                    explicit_broker_scope(&broker_args)?,
-                    cdp::active_target_id(&browser).await?,
-                )
-            };
-            let filled = broker::fill(&broker_args.socket, &scope, &target_id)?;
-            println!("Filled {filled} credential fields");
-            Ok(())
-        }
+        } => run_broker_fill(&browser, broker_args).await,
         Command::Open { url } => commands::cmd_open(&browser, url, json).await,
         Command::Back => commands::cmd_simple_page(&browser, "Page.goBack", "Back").await,
         Command::Forward => commands::cmd_simple_page(&browser, "Page.goForward", "Forward").await,
