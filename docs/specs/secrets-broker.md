@@ -26,7 +26,7 @@
 - [x] On approval denial, fail closed before retrying the fill and do not expose broker error contents.
 - [x] On approval unavailability, fail closed before retrying the fill and do not expose broker error contents.
 - [x] If the retry returns `Locked`, fail closed without another approval or fill attempt.
-- [ ] Keep `broker-unlock` available as an optional explicit approval command.
+- [x] Keep `broker-unlock` available as an optional explicit approval command.
 
 ## How it works
 
@@ -43,6 +43,7 @@
 ## Tests asserting this spec
 
 - `src/broker.rs` — unit tests for authorized fill, exact-scope approval and one retry, denial, unavailable approval, second `Locked`, exact HTTPS mapping, mapping validation, and XDG/home path selection.
+- `tests/cli.rs` — external CLI help test proving `broker-unlock` remains an optional explicit command.
 
 ## Verification evidence
 
