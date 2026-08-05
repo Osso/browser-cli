@@ -96,7 +96,7 @@ pub fn read_mapped_scope_for_url(
     current_url: &str,
     explicit_scope: Option<&str>,
 ) -> Result<String> {
-    validate_scope_config_file(config_path)?;
+    read_and_validate_scope_config_metadata(config_path)?;
     let mappings: HashMap<String, String> = serde_json::from_str(
         &fs::read_to_string(config_path)
             .with_context(|| format!("read credential scope config {}", config_path.display()))?,
@@ -122,7 +122,7 @@ pub fn read_mapped_scope_for_url(
     Ok(mapped_scope.clone())
 }
 
-fn validate_scope_config_file(config_path: &Path) -> Result<()> {
+fn read_and_validate_scope_config_metadata(config_path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(config_path).with_context(|| {
         format!(
             "read credential scope config metadata {}",

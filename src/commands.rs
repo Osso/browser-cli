@@ -21,7 +21,7 @@ pub async fn cmd_open(config: &BrowserConfig, url: String, json: bool) -> Result
     };
     let targets = cdp::get_targets(config).await?;
     let any_target = targets.first().context("No browser targets")?;
-    let ws_url = any_target.webSocketDebuggerUrl.as_ref().unwrap();
+    let ws_url = any_target.web_socket_debugger_url.as_ref().unwrap();
     let mut cdp = CdpConnection::connect(ws_url).await?;
 
     cdp.send("Page.navigate", serde_json::json!({ "url": url }))
@@ -292,7 +292,7 @@ pub async fn cmd_snapshot(config: &BrowserConfig, options: SnapshotOptions) -> R
 pub async fn cmd_get(config: &BrowserConfig, what: &crate::GetCommand, json: bool) -> Result<()> {
     let targets = cdp::get_targets(config).await?;
     let target = cdp::find_active_target(&targets)?;
-    let ws = target.webSocketDebuggerUrl.as_ref().unwrap();
+    let ws = target.web_socket_debugger_url.as_ref().unwrap();
 
     match what {
         crate::GetCommand::Title => print_field(json, "title", &target.title),
@@ -447,7 +447,7 @@ async fn switch_tab(targets: &[cdp::TargetJson], idx: usize) -> Result<()> {
 
 async fn connect_target_session(targets: &[cdp::TargetJson]) -> Result<CdpConnection> {
     let target = targets.first().context("No browser targets")?;
-    CdpConnection::connect(target.webSocketDebuggerUrl.as_ref().unwrap()).await
+    CdpConnection::connect(target.web_socket_debugger_url.as_ref().unwrap()).await
 }
 
 pub async fn cmd_wait(

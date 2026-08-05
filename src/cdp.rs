@@ -13,13 +13,13 @@ unsafe extern "C" {
 }
 
 #[derive(Clone, Deserialize)]
-#[allow(non_snake_case)]
 pub struct TargetJson {
     pub id: String,
     pub title: String,
     pub url: String,
     pub r#type: String,
-    pub webSocketDebuggerUrl: Option<String>,
+    #[serde(rename = "webSocketDebuggerUrl")]
+    pub web_socket_debugger_url: Option<String>,
 }
 
 pub struct CdpConnection {
@@ -375,7 +375,7 @@ async fn get_all_targets(port: u16) -> Result<Vec<TargetJson>> {
         .await?;
     Ok(targets
         .into_iter()
-        .filter(|t| t.r#type == "page" && t.webSocketDebuggerUrl.is_some())
+        .filter(|t| t.r#type == "page" && t.web_socket_debugger_url.is_some())
         .collect())
 }
 
@@ -442,7 +442,7 @@ pub async fn active_target_id(config: &BrowserConfig) -> Result<String> {
 pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
     let targets = get_targets(config).await?;
     let target = find_active_target(&targets)?;
-    let ws_url = target.webSocketDebuggerUrl.as_ref().unwrap();
+    let ws_url = target.web_socket_debugger_url.as_ref().unwrap();
     CdpConnection::connect(ws_url).await
 }
 
