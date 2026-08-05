@@ -54,4 +54,6 @@ Broker fill does not submit the form. The browser operator identifies and clicks
 
 The `src/broker.rs` tests cover the request shape, authorized-fill fast path, exact-scope approval and single retry, denial/unavailable fail-closed behavior, second-`Locked` termination, exact HTTPS hostname mapping, mapping-file validation, and XDG/home path precedence.
 
-CI, push, deployment, and live broker/browser proof remain pending for this documentation cycle.
+Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; the later evidence-only documentation commit does not change executable source. Local `./run-tests.sh` passed `cargo fmt`, `cargo clippy -- -D warnings`, and 62 tests; GitHub CI run `31033510969` passed. Deployment used `./deploy.sh`; installed/release SHA-256 is `a2bad6e754d3703e15f7a510f6309b1ae6e5b2e05d84d55133d421994361b0d3`, and no `browser-cli` process remained.
+
+Fresh terminal-principal smoke used PID `1478667`, start time `151617732`, and TTY `34816`. The first exact `browser:citi` fill returned `Locked`; browser-cli requested exact leaf unlock once, approval/unlock was recorded, and one retry succeeded with only `Filled 2 credential fields` printed. No sign-in or submit occurred; the browser was navigated to `example.com` afterward to clear the form. The broker remained active as PID `3373670` with `NRestarts 0`.

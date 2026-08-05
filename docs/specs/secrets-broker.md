@@ -9,8 +9,8 @@
 - [x] Use published `secrets-broker-client` v0.3.0 pinned by exact git revision `9439cfa62098a6213daa466f69449bc8a99805fc` for socket and protocol transport.
 - [x] Send only the requested broker scope and CDP target ID for browser fill; never send credential field values.
 - [x] Return filled-count metadata rather than credential values.
-- [ ] Rely on the broker to verify the exact registered browser origin before filling.
-- [ ] Never submit the form; MFA and CAPTCHA remain user-driven.
+- [x] Rely on the broker to verify the exact registered browser origin before filling.
+- [x] Never submit the form; MFA and CAPTCHA remain user-driven.
 
 ### Scope resolution
 
@@ -44,12 +44,13 @@
 
 - `src/broker.rs` — unit tests for authorized fill, exact-scope approval and one retry, denial, unavailable approval, second `Locked`, exact HTTPS mapping, mapping validation, and XDG/home path selection.
 
-## Known gaps (current cycle)
+## Verification evidence
 
-- [ ] CI proof for the current integration.
-- [ ] Push proof for the current integration.
-- [ ] Deployment proof for the current integration.
-- [ ] Live broker/browser proof for the current integration.
+- Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; the later evidence-only documentation commit does not change executable source.
+- Local `./run-tests.sh`: `cargo fmt`, `cargo clippy -- -D warnings`, and 62 tests passed.
+- GitHub CI run `31033510969`: passed.
+- Deployment: `./deploy.sh`; installed/release SHA-256 `a2bad6e754d3703e15f7a510f6309b1ae6e5b2e05d84d55133d421994361b0d3`; no `browser-cli` process remained.
+- Fresh terminal-principal smoke: PID `1478667`, start time `151617732`, TTY `34816`; exact `browser:citi` fill returned `Locked`, exact leaf approval/unlock was requested once and recorded, one retry succeeded with only `Filled 2 credential fields`; no sign-in or submit occurred; the browser was navigated to `example.com` afterward. Broker PID `3373670`, `NRestarts 0`.
 
 ## Out of scope
 
