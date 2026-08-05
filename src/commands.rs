@@ -56,14 +56,47 @@ pub async fn cmd_click(config: &BrowserConfig, selector: &str) -> Result<()> {
         r#"(() => {{
             const el = document.querySelector({});
             if (!el) throw new Error('Element not found');
-            el.click();
-            return true;
+            const rect = el.getBoundingClientRect();
+            return {{ x: rect.x, y: rect.y, width: rect.width, height: rect.height }};
         }})()"#,
         serde_json::to_string(selector)?
     );
-    cdp.eval(&script).await?;
+    let point = click_point(&cdp.eval(&script).await?)?;
+    for (_, params) in mouse_click_events(point) {
+        cdp.send("Input.dispatchMouseEvent", params).await?;
+    }
     println!("✓ Clicked");
     Ok(())
+}
+
+fn click_point(rect: &serde_json::Value) -> Result<(f64, f64)> {
+    let value = |name| {
+        rect.get(name)
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| anyhow!("Click target rectangle is missing {name}"))
+    };
+    let x = value("x")?;
+    let y = value("y")?;
+    let width = value("width")?;
+    let height = value("height")?;
+    if width <= 0.0 || height <= 0.0 {
+        return Err(anyhow!("Click target is not visible"));
+    }
+    Ok((x + width / 2.0, y + height / 2.0))
+}
+
+fn mouse_click_events(point: (f64, f64)) -> Vec<(&'static str, serde_json::Value)> {
+    let (x, y) = point;
+    vec![
+        (
+            "mousePressed",
+            serde_json::json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+        ),
+        (
+            "mouseReleased",
+            serde_json::json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+        ),
+    ]
 }
 
 async fn set_input_value(
@@ -450,4 +483,31 @@ async fn wait_for_selector(cdp: &mut CdpConnection, selector: &str) -> Result<()
     let script = WAIT_SELECTOR_SCRIPT_TEMPLATE.replace("__SELECTOR__", &quoted_selector);
     cdp.eval(&script).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_real_pointer_click_for_visible_element_center() {
+        let point =
+            click_point(&serde_json::json!({"x": 10.0, "y": 20.0, "width": 40.0, "height": 20.0}))
+                .unwrap();
+        assert_eq!((30.0, 30.0), point);
+        assert_eq!(
+            vec!["mousePressed", "mouseReleased"],
+            mouse_click_events(point)
+                .iter()
+                .map(|(event, _)| *event)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn rejects_zero_size_click_target() {
+        assert!(
+            click_point(&serde_json::json!({"x": 0, "y": 0, "width": 0, "height": 20})).is_err()
+        );
+    }
 }

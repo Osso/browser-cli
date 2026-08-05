@@ -12,7 +12,7 @@ unsafe extern "C" {
     fn setsid() -> i32;
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[allow(non_snake_case)]
 pub struct TargetJson {
     pub id: String,
@@ -427,6 +427,15 @@ pub fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
         .find(|t| !t.url.starts_with("about:") && !t.url.starts_with("chrome://"))
         .or(targets.first())
         .context("No pages found. Open a tab in Chrome first.")
+}
+
+pub async fn active_target(config: &BrowserConfig) -> Result<TargetJson> {
+    let targets = get_targets(config).await?;
+    Ok(find_active_target(&targets)?.clone())
+}
+
+pub async fn active_target_id(config: &BrowserConfig) -> Result<String> {
+    Ok(active_target(config).await?.id)
 }
 
 /// Connect CDP to the active target

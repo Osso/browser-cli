@@ -1,3 +1,4 @@
+mod broker;
 mod cdp;
 mod commands;
 mod runtime;
@@ -5,8 +6,8 @@ mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;
 
-use anyhow::Result;
-use clap::{Parser, Subcommand};
+use anyhow::{Context, Result, bail};
+use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 const DEFAULT_CDP_PORT: u16 = 9222;
@@ -31,8 +32,36 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Args)]
+struct BrokerArgs {
+    /// Explicit Secrets Broker scope
+    #[arg(long)]
+    scope: Option<String>,
+
+    /// Resolve the broker scope from the active tab's exact HTTPS hostname
+    #[arg(long)]
+    current_origin: bool,
+
+    /// Override the hostname-to-scope mapping file
+    #[arg(long)]
+    scope_config: Option<PathBuf>,
+
+    #[arg(long, default_value = "/run/secrets-broker/broker.sock")]
+    socket: PathBuf,
+}
+
 #[derive(Subcommand)]
 enum Command {
+    /// Request approval to unlock a Secrets Broker scope
+    BrokerUnlock {
+        #[command(flatten)]
+        broker: BrokerArgs,
+    },
+    /// Fill approved credentials through Secrets Broker
+    BrokerFill {
+        #[command(flatten)]
+        broker: BrokerArgs,
+    },
     /// Navigate to a URL
     #[command(visible_alias = "goto", visible_alias = "navigate")]
     Open { url: String },
@@ -174,6 +203,70 @@ pub enum TabsCommand {
     Switch { index: usize },
 }
 
+fn scope_config_path(broker_args: &BrokerArgs) -> Result<PathBuf> {
+    broker_args
+        .scope_config
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(broker::default_scope_config_path)
+}
+
+fn explicit_broker_scope(broker_args: &BrokerArgs) -> Result<String> {
+    if broker_args.scope_config.is_some() {
+        bail!("--scope-config requires --current-origin");
+    }
+    broker_args
+        .scope
+        .clone()
+        .filter(|scope| !scope.trim().is_empty())
+        .context("either --scope or --current-origin is required")
+}
+
+async fn mapped_broker_scope(
+    browser: &cdp::BrowserConfig,
+    broker_args: &BrokerArgs,
+) -> Result<(String, cdp::TargetJson)> {
+    let target = cdp::active_target(browser).await?;
+    let scope = broker::resolve_scope_for_url(
+        &scope_config_path(broker_args)?,
+        &target.url,
+        broker_args.scope.as_deref(),
+    )?;
+    Ok((scope, target))
+}
+
+async fn unlock_broker_scope(
+    browser: &cdp::BrowserConfig,
+    broker_args: &BrokerArgs,
+) -> Result<String> {
+    if broker_args.current_origin {
+        return Ok(mapped_broker_scope(browser, broker_args).await?.0);
+    }
+    explicit_broker_scope(broker_args)
+}
+
+async fn run_broker_unlock(browser: &cdp::BrowserConfig, broker_args: BrokerArgs) -> Result<()> {
+    let scope = unlock_broker_scope(browser, &broker_args).await?;
+    let scopes = broker::unlock(&broker_args.socket, &scope)?;
+    println!("Unlocked {}", scopes.join(", "));
+    Ok(())
+}
+
+async fn run_broker_fill(browser: &cdp::BrowserConfig, broker_args: BrokerArgs) -> Result<()> {
+    let (scope, target_id) = if broker_args.current_origin {
+        let (scope, target) = mapped_broker_scope(browser, &broker_args).await?;
+        (scope, target.id)
+    } else {
+        (
+            explicit_broker_scope(&broker_args)?,
+            cdp::active_target_id(browser).await?,
+        )
+    };
+    let filled = broker::fill(&broker_args.socket, &scope, &target_id)?;
+    println!("Filled {filled} credential fields");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -184,6 +277,12 @@ async fn main() -> Result<()> {
     let json = cli.json;
 
     match cli.command {
+        Command::BrokerUnlock {
+            broker: broker_args,
+        } => run_broker_unlock(&browser, broker_args).await,
+        Command::BrokerFill {
+            broker: broker_args,
+        } => run_broker_fill(&browser, broker_args).await,
         Command::Open { url } => commands::cmd_open(&browser, url, json).await,
         Command::Back => commands::cmd_simple_page(&browser, "Page.goBack", "Back").await,
         Command::Forward => commands::cmd_simple_page(&browser, "Page.goForward", "Forward").await,
