@@ -94,7 +94,7 @@ The script builds the release binary, installs it at `$HOME/.cargo/bin/browser-c
 
 ## Verification
 
-Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; the later evidence-only documentation commit does not change executable source. Local `./run-tests.sh` passed `cargo fmt`, `cargo clippy -- -D warnings`, and 62 tests. GitHub CI run `31033510969` passed. The deployed release was installed by `./deploy.sh`; installed and release SHA-256 is `a2bad6e754d3703e15f7a510f6309b1ae6e5b2e05d84d55133d421994361b0d3`. No `browser-cli` process remained after deployment.
+Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; later evidence/test-only commits do not change executable source. Local `./run-tests.sh` passed `cargo fmt`, `cargo clippy -- -D warnings`, and 62 feature tests. Test-only commit `f9a177bc1494cd022d2def573c186daf4c60f56e` added external proof that optional `broker-unlock` remains available; the current runner passes 63 tests. GitHub CI run `31033510969` passed. The deployed release was installed by `./deploy.sh`; installed and release SHA-256 is `a2bad6e754d3703e15f7a510f6309b1ae6e5b2e05d84d55133d421994361b0d3`. No `browser-cli` process remained after deployment.
 
 Fresh terminal-principal smoke used PID `1478667`, start time `151617732`, and TTY `34816`. The first exact `browser:citi` fill returned `Locked`; browser-cli requested that exact leaf unlock once, approval/unlock was recorded, and one retry succeeded with only `Filled 2 credential fields` printed. No sign-in or submit occurred; the browser was navigated to `example.com` afterward to clear the form. The broker remained active as PID `3373670` with `NRestarts 0`.
 

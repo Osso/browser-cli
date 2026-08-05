@@ -47,8 +47,9 @@
 
 ## Verification evidence
 
-- Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; the later evidence-only documentation commit does not change executable source.
-- Local `./run-tests.sh`: `cargo fmt`, `cargo clippy -- -D warnings`, and 62 tests passed.
+- Feature/source commit `34b850125ba037d411f2e4abde330cda3706e6d2` was pushed to remote `master`; later evidence/test-only commits do not change executable source.
+- Local feature `./run-tests.sh`: `cargo fmt`, `cargo clippy -- -D warnings`, and 62 tests passed.
+- Test-only commit `f9a177bc1494cd022d2def573c186daf4c60f56e` adds external proof that optional `broker-unlock` remains available; the current runner passes 63 tests.
 - GitHub CI run `31033510969`: passed.
 - Deployment: `./deploy.sh`; installed/release SHA-256 `a2bad6e754d3703e15f7a510f6309b1ae6e5b2e05d84d55133d421994361b0d3`; no `browser-cli` process remained.
 - Fresh terminal-principal smoke: PID `1478667`, start time `151617732`, TTY `34816`; exact `browser:citi` fill returned `Locked`, exact leaf approval/unlock was requested once and recorded, one retry succeeded with only `Filled 2 credential fields`; no sign-in or submit occurred; the browser was navigated to `example.com` afterward. Broker PID `3373670`, `NRestarts 0`.
