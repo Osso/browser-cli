@@ -30,10 +30,6 @@ struct BrowserFill<'a> {
 }
 #[derive(Deserialize)]
 struct Response {
-    #[allow(dead_code)]
-    version: u16,
-    #[allow(dead_code)]
-    request_id: String,
     payload: Payload,
 }
 #[derive(Deserialize)]
@@ -54,7 +50,7 @@ pub fn unlock(socket: &Path, scope: &str) -> Result<Vec<String>> {
         request_id: "browser-cli",
         operation: Operation::Unlock(ScopeRequest { scope }),
     };
-    match exchange(socket, &request)? {
+    match send_broker_request(socket, &request)? {
         Payload::Unlocked { scopes } => Ok(scopes),
         Payload::Error(error) => bail!("broker denied unlock: {}", error.message),
         _ => bail!("broker returned an unexpected unlock response"),
@@ -67,7 +63,7 @@ pub fn fill(socket: &Path, scope: &str, target_id: &str) -> Result<usize> {
         request_id: "browser-cli",
         operation: Operation::BrowserFill(BrowserFill { scope, target_id }),
     };
-    match exchange(socket, &request)? {
+    match send_broker_request(socket, &request)? {
         Payload::BrowserFilled { filled_count } => Ok(filled_count),
         Payload::Error(error) => bail!("broker denied fill: {}", error.message),
         _ => bail!("broker returned an unexpected fill response"),
@@ -146,7 +142,7 @@ fn validate_scope_config_file(config_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn exchange(socket: &Path, request: &Request<'_>) -> Result<Payload> {
+fn send_broker_request(socket: &Path, request: &Request<'_>) -> Result<Payload> {
     let bytes = rmp_serde::to_vec_named(request)?;
     let mut stream = UnixStream::connect(socket)
         .with_context(|| format!("connect broker socket {}", socket.display()))?;
