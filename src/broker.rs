@@ -91,7 +91,7 @@ fn scope_config_path(xdg_config_home: Option<&str>, home: Option<&str>) -> Resul
         .join("credential-scopes.json"))
 }
 
-pub fn resolve_scope_for_url(
+pub fn read_mapped_scope_for_url(
     config_path: &Path,
     current_url: &str,
     explicit_scope: Option<&str>,
@@ -248,7 +248,7 @@ mod tests {
         let path = write_scope_config(r#"{"online.citi.com":"browser:citi"}"#, 0o600);
 
         assert_eq!(
-            resolve_scope_for_url(&path, "https://online.citi.com/login", Some("browser:citi"))
+            read_mapped_scope_for_url(&path, "https://online.citi.com/login", Some("browser:citi"))
                 .unwrap(),
             "browser:citi"
         );
@@ -261,19 +261,19 @@ mod tests {
         let path = write_scope_config(r#"{"online.citi.com":"browser:citi"}"#, 0o600);
 
         assert!(
-            resolve_scope_for_url(&path, "https://evilonline.citi.com/login", None)
+            read_mapped_scope_for_url(&path, "https://evilonline.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("not mapped")
         );
         assert!(
-            resolve_scope_for_url(&path, "http://online.citi.com/login", None)
+            read_mapped_scope_for_url(&path, "http://online.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("HTTPS")
         );
         assert!(
-            resolve_scope_for_url(
+            read_mapped_scope_for_url(
                 &path,
                 "https://online.citi.com/login",
                 Some("browser:other")
@@ -285,7 +285,7 @@ mod tests {
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
-            resolve_scope_for_url(&path, "https://online.citi.com/login", None)
+            read_mapped_scope_for_url(&path, "https://online.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("0600")
@@ -302,7 +302,7 @@ mod tests {
             thread::current().id()
         ));
         assert!(
-            resolve_scope_for_url(&missing, "https://online.citi.com/login", None)
+            read_mapped_scope_for_url(&missing, "https://online.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("metadata")
@@ -310,7 +310,7 @@ mod tests {
 
         let malformed = write_scope_config("not json", 0o600);
         assert!(
-            resolve_scope_for_url(&malformed, "https://online.citi.com/login", None)
+            read_mapped_scope_for_url(&malformed, "https://online.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("parse")
@@ -321,7 +321,7 @@ mod tests {
         let symlink = target.with_extension("symlink.json");
         std::os::unix::fs::symlink(&target, &symlink).unwrap();
         assert!(
-            resolve_scope_for_url(&symlink, "https://online.citi.com/login", None)
+            read_mapped_scope_for_url(&symlink, "https://online.citi.com/login", None)
                 .unwrap_err()
                 .to_string()
                 .contains("regular file")

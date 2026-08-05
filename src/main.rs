@@ -227,7 +227,7 @@ async fn mapped_broker_scope(
     broker_args: &BrokerArgs,
 ) -> Result<(String, cdp::TargetJson)> {
     let target = cdp::active_target(browser).await?;
-    let scope = broker::resolve_scope_for_url(
+    let scope = broker::read_mapped_scope_for_url(
         &scope_config_path(broker_args)?,
         &target.url,
         broker_args.scope.as_deref(),
