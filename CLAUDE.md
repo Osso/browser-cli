@@ -41,13 +41,15 @@ Key CDP methods used:
 
 ## Secrets Broker integration
 
-- `broker-unlock --scope browser:citi` requests human approval through authd.
-- `broker-fill --scope browser:citi` sends only the scope and active target ID to `/run/secrets-broker/broker.sock`.
-- `--current-origin` resolves the active tab's exact HTTPS hostname through `$XDG_CONFIG_HOME/browser-cli/credential-scopes.json` or `~/.config/browser-cli/credential-scopes.json`.
+- Socket/protocol transport belongs to published `secrets-broker-client` v0.3.0, pinned by exact git revision `9439cfa62098a6213daa466f69449bc8a99805fc`.
+- `broker.rs` retains exact-host scope mapping and delegates transport to the shared client; `main.rs` retains CDP active-target discovery and passes only scope plus target ID.
+- `broker-unlock --scope SCOPE` requests optional human approval through authd. `--current-origin` resolves the active tab's exact HTTPS hostname through `$XDG_CONFIG_HOME/browser-cli/credential-scopes.json` or `~/.config/browser-cli/credential-scopes.json`.
 - The mapping file is a mode-`0600`, current-user-owned regular JSON file from lowercase exact hostname to broker scope. Never add credentials, wildcards, suffix matching, symlinks, or permissive modes.
-- When `--scope` and `--current-origin` are combined, require equality; re-resolve immediately before fill and fail closed for missing, malformed, insecure, or unmapped state.
-- The broker verifies the exact registered origin, fills approved selectors through CDP, and returns only filled-field metadata.
-- Browser-cli never opens the credential store, accepts credential values for this path, or submits the form during broker fill. The agent clicks submit; MFA and CAPTCHA remain user-driven.
+- When `--scope` and `--current-origin` are combined, require exact equality. Fail closed for missing, malformed, insecure, unmapped, symlinked, non-regular, foreign-owned, or permissive modes.
+- `broker-fill` first requests the fill. An already-authorized request skips unlock. On `Locked`, request approval once for the resolved exact scope and retry the fill exactly once. Approval denial, approval unavailability, or a second `Locked` response fails closed; never retry approval or fill again.
+- The broker verifies the exact registered origin, fills approved selectors through CDP, and returns only filled-count metadata.
+- Browser-cli never opens the credential store, accepts credential values for this path, or submits the form during broker fill. The operator clicks submit; MFA and CAPTCHA remain user-driven.
+
 
 ## Deployment
 
