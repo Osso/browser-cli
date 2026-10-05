@@ -4,8 +4,8 @@
 
 ## What it must do
 
-- [ ] Reject `Runtime.evaluate` responses containing `exceptionDetails`, even without a top-level protocol error, before returning any value, description, or null.
-- [ ] Report the exception object's description when available, otherwise the exception text.
+- [x] Reject `Runtime.evaluate` responses containing `exceptionDetails`, even without a top-level protocol error, before returning any value, description, or null.
+- [x] Report the exception object's description when available, otherwise the exception text.
 - [x] Preserve successful JSON values, description-only results, and undefined results represented as null.
 
 ## How it works
@@ -19,6 +19,10 @@
 ## Tests asserting this spec
 
 - `src/cdp.rs`, `eval_tests` — real loopback WebSocket CDP fixture; exception descriptions, exception text taking precedence over values, exceptions without values/descriptions, and successful result compatibility.
+
+## Verification evidence
+
+`cargo test --locked --bin browser-cli cdp::eval_tests -- --nocapture` at `2d10d367a8ec47e431ffc65f3d2429989fd2a6b0`: four tests passed. Before the fix, the three exception regressions failed by returning description, value, and null; successful result compatibility passed.
 
 ## Out of scope
 
