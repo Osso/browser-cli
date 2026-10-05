@@ -71,15 +71,26 @@ impl CdpConnection {
     }
 
     pub async fn eval(&mut self, expression: &str) -> Result<serde_json::Value> {
-        let result = self
-            .send(
-                "Runtime.evaluate",
-                serde_json::json!({
-                    "expression": expression,
-                    "returnByValue": true
-                }),
-            )
-            .await?;
+        self.evaluate(expression, false).await
+    }
+
+    pub async fn eval_await(&mut self, expression: &str) -> Result<serde_json::Value> {
+        self.evaluate(expression, true).await
+    }
+
+    async fn evaluate(
+        &mut self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<serde_json::Value> {
+        let mut params = serde_json::json!({
+            "expression": expression,
+            "returnByValue": true
+        });
+        if await_promise {
+            params["awaitPromise"] = serde_json::json!(true);
+        }
+        let result = self.send("Runtime.evaluate", params).await?;
 
         if let Some(details) = result.get("exceptionDetails") {
             let message = details
@@ -474,6 +485,7 @@ mod eval_tests {
             let mut ws = accept_async(stream).await?;
             let request = ws.next().await.expect("CDP evaluation request")?;
             let request: Value = serde_json::from_str(request.to_text()?)?;
+            assert_ne!(request["params"]["awaitPromise"], true);
             ws.send(Message::Text(
                 json!({"id": request["id"], "result": response}).to_string(),
             ))

@@ -481,13 +481,141 @@ pub async fn cmd_wait(
 async fn wait_for_selector(cdp: &mut CdpConnection, selector: &str) -> Result<()> {
     let quoted_selector = serde_json::to_string(selector)?;
     let script = WAIT_SELECTOR_SCRIPT_TEMPLATE.replace("__SELECTOR__", &quoted_selector);
-    cdp.eval(&script).await?;
+    cdp.eval_await(&script).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::sync::oneshot;
+    use tokio::time::{Duration, timeout};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    async fn selector_wait_response(response: Value) -> (bool, Result<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (request_seen, request_received) = oneshot::channel();
+        let (release_response, response_released) = oneshot::channel();
+        let server = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let request = ws.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(request.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "Runtime.evaluate");
+            let awaits_promise = request["params"]["awaitPromise"] == true;
+            request_seen.send(()).unwrap();
+            if !awaits_promise {
+                ws.send(Message::Text(
+                    json!({"id": request["id"], "result": {"result": {
+                        "type": "object", "className": "Promise", "description": "Promise"
+                    }}})
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+            response_released.await.unwrap();
+            if awaits_promise {
+                let mut response = response;
+                response["id"] = request["id"].clone();
+                ws.send(Message::Text(response.to_string())).await.unwrap();
+            }
+        };
+        let client = async {
+            let mut cdp = CdpConnection::connect(&format!("ws://{address}"))
+                .await
+                .unwrap();
+            let wait = wait_for_selector(&mut cdp, "#delayed");
+            tokio::pin!(wait);
+            let pending_check = async {
+                request_received.await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+            // Poll the production wait while the fixture receives its request.
+            let early = tokio::select! {
+                result = &mut wait => Some(result),
+                () = pending_check => None,
+            };
+            release_response.send(()).unwrap();
+            match early {
+                Some(result) => (true, result),
+                None => (false, wait.await),
+            }
+        };
+        let (_, result) = timeout(Duration::from_secs(5), async {
+            tokio::join!(server, client)
+        })
+        .await
+        .unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn selector_wait_stays_pending_until_resolution() {
+        let (early, result) = selector_wait_response(json!({
+            "result": {"result": {"type": "boolean", "value": true}}
+        }))
+        .await;
+        assert!(!early, "selector wait completed before Promise resolution");
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn selector_wait_stays_pending_until_timeout_rejection() {
+        let (early, result) = selector_wait_response(json!({
+            "result": {
+                "result": {"type": "string", "value": "Timeout"},
+                "exceptionDetails": {"text": "Uncaught (in promise) Timeout"}
+            }
+        }))
+        .await;
+        assert!(!early, "selector wait completed before Promise rejection");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "JavaScript exception: Uncaught (in promise) Timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_wait_propagates_exception_description() {
+        let (early, result) = selector_wait_response(json!({
+            "result": {
+                "result": {"type": "undefined"},
+                "exceptionDetails": {
+                    "text": "Uncaught (in promise)",
+                    "exception": {"description": "SyntaxError: invalid selector"}
+                }
+            }
+        }))
+        .await;
+        assert!(!early, "selector wait completed before Promise rejection");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "JavaScript exception: SyntaxError: invalid selector"
+        );
+    }
+
+    #[tokio::test]
+    async fn selector_wait_propagates_protocol_error() {
+        let (early, result) = selector_wait_response(json!({
+            "error": {"code": -32000, "message": "Execution context was destroyed"}
+        }))
+        .await;
+        assert!(
+            !early,
+            "selector wait completed before delayed protocol error"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Execution context was destroyed")
+        );
+    }
 
     #[test]
     fn builds_real_pointer_click_for_visible_element_center() {
