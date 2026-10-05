@@ -81,6 +81,16 @@ impl CdpConnection {
             )
             .await?;
 
+        if let Some(details) = result.get("exceptionDetails") {
+            let message = details
+                .get("exception")
+                .and_then(|exception| exception.get("description"))
+                .and_then(|description| description.as_str())
+                .or_else(|| details.get("text").and_then(|text| text.as_str()))
+                .map_or_else(|| details.to_string(), str::to_string);
+            return Err(anyhow!("JavaScript exception: {message}"));
+        }
+
         if let Some(value) = result.get("result").and_then(|r| r.get("value")) {
             Ok(value.clone())
         } else if let Some(desc) = result
@@ -444,6 +454,128 @@ pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
     let target = find_active_target(&targets)?;
     let ws_url = target.web_socket_debugger_url.as_ref().unwrap();
     CdpConnection::connect(ws_url).await
+}
+
+#[cfg(test)]
+mod eval_tests {
+    use super::CdpConnection;
+    use anyhow::Result;
+    use futures::{SinkExt, StreamExt};
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::time::{Duration, timeout};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    async fn eval_response(response: Value) -> Result<Value> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = async {
+            let (stream, _) = listener.accept().await?;
+            let mut ws = accept_async(stream).await?;
+            let request = ws.next().await.expect("CDP evaluation request")?;
+            let request: Value = serde_json::from_str(request.to_text()?)?;
+            ws.send(Message::Text(
+                json!({"id": request["id"], "result": response}).to_string(),
+            ))
+            .await?;
+            Ok::<_, anyhow::Error>(())
+        };
+        let client = async {
+            let mut cdp = CdpConnection::connect(&format!("ws://{address}")).await?;
+            cdp.eval("document.querySelector('#missing').value").await
+        };
+        let (server_result, eval_result) = timeout(Duration::from_secs(5), async {
+            tokio::join!(server, client)
+        })
+        .await?;
+        server_result?;
+        eval_result
+    }
+
+    #[tokio::test]
+    async fn eval_rejects_exception_details_with_description() {
+        let error = eval_response(json!({
+            "result": {"type": "object", "subtype": "error", "description": "TypeError: Cannot read properties of null (reading 'value')"},
+            "exceptionDetails": {
+                "exceptionId": 1, "text": "Uncaught", "lineNumber": 0, "columnNumber": 34,
+                "exception": {"type": "object", "subtype": "error", "description": "TypeError: Cannot read properties of null (reading 'value')"}
+            }
+        }))
+        .await
+        .expect_err("JavaScript exception must not be a successful description");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TypeError: Cannot read properties of null (reading 'value')")
+        );
+    }
+
+    #[tokio::test]
+    async fn eval_rejects_exception_details_with_text_before_value() {
+        let error = eval_response(json!({
+            "result": {"type": "string", "value": "Timeout"},
+            "exceptionDetails": {
+                "exceptionId": 2, "text": "Uncaught (in promise) Timeout", "lineNumber": 0, "columnNumber": 0
+            }
+        }))
+        .await
+        .expect_err("JavaScript exception must take precedence over a value");
+
+        assert!(error.to_string().contains("Uncaught (in promise) Timeout"));
+    }
+
+    #[tokio::test]
+    async fn eval_rejects_exception_details_without_value_or_description() {
+        let error = eval_response(json!({
+            "result": {"type": "undefined"},
+            "exceptionDetails": {
+                "exceptionId": 3, "text": "Uncaught SyntaxError: Unexpected token ')'", "lineNumber": 0, "columnNumber": 0
+            }
+        }))
+        .await
+        .expect_err("JavaScript exception must not become successful null");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Uncaught SyntaxError: Unexpected token ')'")
+        );
+    }
+
+    #[tokio::test]
+    async fn eval_preserves_successful_values_descriptions_and_undefined() {
+        let cases = [
+            (json!({"type": "number", "value": 42}), json!(42)),
+            (json!({"type": "boolean", "value": false}), json!(false)),
+            (
+                json!({"type": "string", "value": "ready", "description": "ignored"}),
+                json!("ready"),
+            ),
+            (
+                json!({"type": "object", "value": {"count": 2}}),
+                json!({"count": 2}),
+            ),
+            (json!({"type": "object", "value": [1, 2]}), json!([1, 2])),
+            (
+                json!({"type": "object", "subtype": "null", "value": null}),
+                Value::Null,
+            ),
+            (
+                json!({"type": "object", "className": "Promise", "description": "Promise"}),
+                json!("Promise"),
+            ),
+            (json!({"type": "undefined"}), Value::Null),
+        ];
+        for (remote_object, expected) in cases {
+            assert_eq!(
+                eval_response(json!({"result": remote_object}))
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+    }
 }
 
 #[cfg(test)]
