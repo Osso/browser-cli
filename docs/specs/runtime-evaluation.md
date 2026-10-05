@@ -27,6 +27,14 @@
 
 `cargo test --locked --bin browser-cli cdp::eval_tests -- --nocapture` at `2d10d367a8ec47e431ffc65f3d2429989fd2a6b0`: four tests passed. Before the fix, the three exception regressions failed by returning description, value, and null; successful result compatibility passed.
 
+Selector-wait proof at `e93041fe231b2f2ceff8d64f5dc0e487c2edcad4`:
+
+- `cargo test --locked --bin browser-cli selector_wait_ -- --nocapture`: four tests passed. Before implementation (base `6e39999` plus regression tests), all four failed because the wait completed before the fixture released resolution, rejection, or protocol error.
+- `cargo test --locked --bin browser-cli cdp::eval_tests -- --nocapture`: four tests passed, including synchronous values, Promise descriptions, undefined, and exception compatibility.
+- `cargo fmt`: successful before the implementation commit. Subsequent changes only record this evidence; test proof remains valid for unchanged source.
+
+Boundary: loopback CDP transport and production selector-wait completion/error handling. No live-browser, DOM polling, command stdout, or account integration proof.
+
 ## Out of scope
 
 - General Promise awaiting, URL waiting, and load-state waiting.
