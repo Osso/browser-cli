@@ -10,6 +10,7 @@ src/
   broker.rs     - credential-free Secrets Broker socket client
   cdp.rs        - CDP target discovery and browser interaction
   commands.rs   - direct browser command handlers
+  tab_target.rs - --tab/--session selection and session-to-tab store
 ```
 
 Broker integration is deliberately credential-free: browser-cli sends only a named scope and active CDP target ID to Secrets Broker.
@@ -22,6 +23,12 @@ Broker integration is deliberately credential-free: browser-cli sends only a nam
 - Commands use CSS selectors for element targeting
 - `click` rejects zero-size targets and dispatches real CDP pointer events; do not replace it with DOM `.click()` for custom controls
 - Screenshots output JPEG quality 15
+
+## Tab selection
+
+- Page commands resolve their tab only through `cdp::selected_target` / `connect_selected`. Never add an active-tab or first-tab fallback; missing selection must fail.
+- New tabs are created with `Target.createTarget {background: true}` on the browser-level connection so other agents' focus is untouched.
+- Tests must not run commands that reach `get_targets` on a test port: it auto-starts Chromium with the real profile.
 
 ## CDP Communication
 

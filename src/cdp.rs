@@ -6,13 +6,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::tab_target::{MISSING_SELECTOR, SessionStore, TabChoice, TabSelector, choose_tab};
+
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> u32;
     fn setsid() -> i32;
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct TargetJson {
     pub id: String,
     pub title: String,
@@ -299,6 +301,7 @@ const DEFAULT_CHROMIUM_USER_DATA_DIR: &str = "/home/osso/.config/chromium";
 pub struct BrowserConfig {
     pub port: u16,
     pub user_data_dir: Option<PathBuf>,
+    pub tab: Option<TabSelector>,
 }
 
 fn chrome_launch_args(
@@ -442,28 +445,73 @@ pub async fn get_targets(config: &BrowserConfig) -> Result<Vec<TargetJson>> {
     Ok(targets)
 }
 
-pub fn find_active_target(targets: &[TargetJson]) -> Result<&TargetJson> {
-    targets
-        .iter()
-        .find(|t| !t.url.starts_with("about:") && !t.url.starts_with("chrome://"))
-        .or(targets.first())
-        .context("No pages found. Open a tab in Chrome first.")
+/// Browser-level CDP connection for `Target.*` commands; never tied to a tab.
+pub async fn connect_browser(port: u16) -> Result<CdpConnection> {
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(rename = "webSocketDebuggerUrl")]
+        web_socket_debugger_url: String,
+    }
+    let version: Version = reqwest::get(format!("http://127.0.0.1:{port}/json/version"))
+        .await
+        .context("Failed to connect to Chrome")?
+        .json()
+        .await?;
+    CdpConnection::connect(&version.web_socket_debugger_url).await
 }
 
-pub async fn active_target(config: &BrowserConfig) -> Result<TargetJson> {
+/// Opens a tab without activating it, so other agents' tabs keep focus.
+pub async fn create_background_tab(config: &BrowserConfig, url: &str) -> Result<TargetJson> {
+    let mut browser = connect_browser(config.port).await?;
+    let result = browser
+        .send(
+            "Target.createTarget",
+            serde_json::json!({ "url": url, "background": true }),
+        )
+        .await?;
+    let id = result["targetId"]
+        .as_str()
+        .context("Chrome did not return the new tab ID")?;
+    for _ in 0..30 {
+        if let Some(target) = get_all_targets(config.port)
+            .await?
+            .into_iter()
+            .find(|t| t.id == id)
+        {
+            return Ok(target);
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+    anyhow::bail!("New tab {id} did not appear in the target list")
+}
+
+/// The tab this invocation acts on: `--tab`, or the `--session` tab (created on first use).
+pub async fn selected_target(config: &BrowserConfig) -> Result<TargetJson> {
+    let selector = config.tab.as_ref().context(MISSING_SELECTOR)?;
     let targets = get_targets(config).await?;
-    Ok(find_active_target(&targets)?.clone())
+    let store = SessionStore::default_location()?;
+    let bound = match selector {
+        TabSelector::Session(session) => store.bound_target(session)?,
+        TabSelector::Tab(_) => None,
+    };
+    match choose_tab(&targets, selector, bound.as_deref())? {
+        TabChoice::Use(target) => Ok(target),
+        TabChoice::CreateForSession => {
+            let target = create_background_tab(config, "about:blank").await?;
+            if let TabSelector::Session(session) = selector {
+                store.bind(session, &target.id)?;
+            }
+            Ok(target)
+        }
+    }
 }
 
-pub async fn active_target_id(config: &BrowserConfig) -> Result<String> {
-    Ok(active_target(config).await?.id)
-}
-
-/// Connect CDP to the active target
-pub async fn connect_active(config: &BrowserConfig) -> Result<CdpConnection> {
-    let targets = get_targets(config).await?;
-    let target = find_active_target(&targets)?;
-    let ws_url = target.web_socket_debugger_url.as_ref().unwrap();
+pub async fn connect_selected(config: &BrowserConfig) -> Result<CdpConnection> {
+    let target = selected_target(config).await?;
+    let ws_url = target
+        .web_socket_debugger_url
+        .as_ref()
+        .context("Selected tab has no debugger URL")?;
     CdpConnection::connect(ws_url).await
 }
 

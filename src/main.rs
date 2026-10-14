@@ -5,6 +5,7 @@ mod runtime;
 mod snapshot;
 #[cfg(test)]
 mod snapshot_tests;
+mod tab_target;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
@@ -27,6 +28,14 @@ struct Cli {
     /// Chromium user data directory used when auto-starting the browser
     #[arg(long)]
     user_data_dir: Option<PathBuf>,
+
+    /// Act on this tab (CDP target ID). Defaults to $BROWSER_CLI_TAB.
+    #[arg(long, global = true)]
+    tab: Option<String>,
+
+    /// Act on this session's dedicated background tab, created on first use. Defaults to $BROWSER_CLI_SESSION.
+    #[arg(long, global = true)]
+    session: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -195,11 +204,11 @@ pub enum GetCommand {
 pub enum TabsCommand {
     /// List open tabs
     List,
-    /// Open new tab
+    /// Open a background tab; with --session it becomes the session's tab
     New { url: Option<String> },
-    /// Close tab
-    Close { index: Option<usize> },
-    /// Switch to tab by index
+    /// Close the selected tab
+    Close,
+    /// Bind the --session to the tab at this `tabs list` index (does not activate it)
     Switch { index: usize },
 }
 
@@ -226,7 +235,7 @@ async fn mapped_broker_scope(
     browser: &cdp::BrowserConfig,
     broker_args: &BrokerArgs,
 ) -> Result<(String, cdp::TargetJson)> {
-    let target = cdp::active_target(browser).await?;
+    let target = cdp::selected_target(browser).await?;
     let scope = broker::read_mapped_scope_for_url(
         &scope_config_path(broker_args)?,
         &target.url,
@@ -259,12 +268,26 @@ async fn run_broker_fill(browser: &cdp::BrowserConfig, broker_args: BrokerArgs) 
     } else {
         (
             explicit_broker_scope(&broker_args)?,
-            cdp::active_target_id(browser).await?,
+            cdp::selected_target(browser).await?.id,
         )
     };
     let filled = broker::fill(&broker_args.socket, &scope, &target_id)?;
     println!("Filled {filled} credential fields");
     Ok(())
+}
+
+/// Explicit flags replace the environment pair, so `--tab` works inside an agent session.
+fn selected_tab(
+    tab: Option<String>,
+    session: Option<String>,
+) -> Result<Option<tab_target::TabSelector>> {
+    if tab.is_some() || session.is_some() {
+        return tab_target::tab_selector(tab, session);
+    }
+    tab_target::tab_selector(
+        std::env::var("BROWSER_CLI_TAB").ok(),
+        std::env::var("BROWSER_CLI_SESSION").ok(),
+    )
 }
 
 #[tokio::main]
@@ -273,6 +296,7 @@ async fn main() -> Result<()> {
     let browser = cdp::BrowserConfig {
         port: cli.port,
         user_data_dir: cli.user_data_dir,
+        tab: selected_tab(cli.tab, cli.session)?,
     };
     let json = cli.json;
 

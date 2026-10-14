@@ -100,6 +100,20 @@ Fresh terminal-principal smoke used PID `1478667`, start time `151617732`, and T
 
 ## Usage
 
+### Tab selection (required)
+
+Every page command acts on one explicit tab, so concurrent agents never drive each other's tabs. Without a selector, commands fail.
+
+```bash
+browser-cli --session <key> open https://example.com   # or BROWSER_CLI_SESSION=<key>
+browser-cli --tab <targetId> get url                     # or BROWSER_CLI_TAB=<targetId>
+```
+
+- `--session` binds the key to its own background tab, created on first use and stored in `$XDG_STATE_HOME/browser-cli/sessions` (default `~/.local/state/...`). A closed tab is replaced on next use.
+- `--tab` names an existing CDP target ID (shown by `tabs list`); a closed tab fails instead of falling back.
+- Explicit flags override the environment pair. `--tab` and `--session` together are rejected.
+- Pi sets `BROWSER_CLI_SESSION=<sessionId>:<agentId>` for its browser-cli tool automatically.
+
 ### Navigation
 
 ```bash
@@ -107,7 +121,7 @@ browser-cli open <url>       # Navigate (aliases: goto, navigate)
 browser-cli back             # Go back
 browser-cli forward          # Go forward
 browser-cli reload           # Reload page
-browser-cli close            # Close tab (aliases: quit, exit)
+browser-cli close            # Close selected tab (aliases: quit, exit)
 ```
 
 ### Interactions
@@ -135,10 +149,10 @@ browser-cli get count <selector>       # Count matching elements
 ### Tab management
 
 ```bash
-browser-cli tabs list                  # List open tabs
-browser-cli tabs new [url]             # Open new tab
-browser-cli tabs close [index]         # Close tab (default: 0)
-browser-cli tabs switch <index>        # Switch to tab
+browser-cli tabs list                  # List tabs with target IDs; * marks the selected tab
+browser-cli tabs new [url]             # Open a background tab; with --session it becomes the session tab
+browser-cli tabs close                 # Close the selected tab
+browser-cli tabs switch <index>        # Rebind --session to that tab (never activates it)
 ```
 
 ### Screenshots

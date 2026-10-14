@@ -1,8 +1,9 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use std::path::PathBuf;
 
 use crate::cdp::{self, BrowserConfig, CdpConnection};
 use crate::snapshot::{self, SnapshotOptions};
+use crate::tab_target::{MISSING_SELECTOR, SessionStore, TabSelector};
 
 const WAIT_SELECTOR_SCRIPT_TEMPLATE: &str = r#"new Promise((resolve, reject) => {
     const check = () => {
@@ -19,10 +20,7 @@ pub async fn cmd_open(config: &BrowserConfig, url: String, json: bool) -> Result
     } else {
         format!("https://{}", url)
     };
-    let targets = cdp::get_targets(config).await?;
-    let any_target = targets.first().context("No browser targets")?;
-    let ws_url = any_target.web_socket_debugger_url.as_ref().unwrap();
-    let mut cdp = CdpConnection::connect(ws_url).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
 
     cdp.send("Page.navigate", serde_json::json!({ "url": url }))
         .await?;
@@ -44,14 +42,14 @@ pub async fn cmd_open(config: &BrowserConfig, url: String, json: bool) -> Result
 }
 
 pub async fn cmd_simple_page(config: &BrowserConfig, method: &str, label: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     cdp.send(method, serde_json::json!({})).await?;
     println!("✓ {}", label);
     Ok(())
 }
 
 pub async fn cmd_click(config: &BrowserConfig, selector: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     let script = format!(
         r#"(() => {{
             const el = document.querySelector({});
@@ -105,7 +103,7 @@ async fn set_input_value(
     text: &str,
     append: bool,
 ) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     if !append && is_file_input(&mut cdp, selector).await? {
         set_file_input_files(&mut cdp, selector, &[text.to_string()]).await?;
         return Ok(());
@@ -146,7 +144,7 @@ pub async fn cmd_attach(config: &BrowserConfig, selector: &str, files: &[String]
         return Err(anyhow!("At least one file path is required"));
     }
 
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     if !is_file_input(&mut cdp, selector).await? {
         return Err(anyhow!("Element is not an input[type=file]"));
     }
@@ -237,7 +235,7 @@ async fn set_file_input_files(
 }
 
 pub async fn cmd_press(config: &BrowserConfig, key: &str) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     cdp.send(
         "Input.dispatchKeyEvent",
         serde_json::json!({ "type": "keyDown", "key": key }),
@@ -253,7 +251,7 @@ pub async fn cmd_press(config: &BrowserConfig, key: &str) -> Result<()> {
 }
 
 pub async fn cmd_screenshot(config: &BrowserConfig, path: &str, full: bool) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     let mut params = serde_json::json!({ "format": "jpeg", "quality": 15 });
     if full {
         params["captureBeyondViewport"] = serde_json::json!(true);
@@ -272,7 +270,7 @@ pub async fn cmd_screenshot(config: &BrowserConfig, path: &str, full: bool) -> R
 }
 
 pub async fn cmd_eval(config: &BrowserConfig, script: &str, json: bool) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     let result = cdp.eval(script).await?;
     if json {
         println!("{}", serde_json::to_string(&result)?);
@@ -283,16 +281,18 @@ pub async fn cmd_eval(config: &BrowserConfig, script: &str, json: bool) -> Resul
 }
 
 pub async fn cmd_snapshot(config: &BrowserConfig, options: SnapshotOptions) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     let output = snapshot::take_snapshot(&mut cdp, &options).await?;
     println!("{}", output);
     Ok(())
 }
 
 pub async fn cmd_get(config: &BrowserConfig, what: &crate::GetCommand, json: bool) -> Result<()> {
-    let targets = cdp::get_targets(config).await?;
-    let target = cdp::find_active_target(&targets)?;
-    let ws = target.web_socket_debugger_url.as_ref().unwrap();
+    let target = cdp::selected_target(config).await?;
+    let ws = target
+        .web_socket_debugger_url
+        .as_deref()
+        .context("Selected tab has no debugger URL")?;
 
     match what {
         crate::GetCommand::Title => print_field(json, "title", &target.title),
@@ -380,74 +380,95 @@ pub async fn cmd_tabs(
     action: &crate::TabsCommand,
     json: bool,
 ) -> Result<()> {
-    let targets = cdp::get_targets(config).await?;
-
     match action {
-        crate::TabsCommand::List => print_tab_list(&targets, json)?,
-        crate::TabsCommand::New { url } => {
-            create_tab(&targets, url.as_deref()).await?;
-        }
-        crate::TabsCommand::Close { index } => {
-            close_tab(&targets, index.unwrap_or(0)).await?;
-        }
-        crate::TabsCommand::Switch { index } => {
-            switch_tab(&targets, *index).await?;
-        }
+        crate::TabsCommand::List => print_tab_list(config, json).await,
+        crate::TabsCommand::New { url } => create_tab(config, url.as_deref()).await,
+        crate::TabsCommand::Close => close_tab(config).await,
+        crate::TabsCommand::Switch { index } => bind_session_tab(config, *index).await,
     }
-    Ok(())
 }
 
-fn print_tab_list(targets: &[cdp::TargetJson], json: bool) -> Result<()> {
+async fn print_tab_list(config: &BrowserConfig, json: bool) -> Result<()> {
+    let targets = cdp::get_targets(config).await?;
+    let selected = selected_tab_id(config)?;
     if json {
         let tabs: Vec<_> = targets
             .iter()
-            .map(|t| serde_json::json!({ "title": t.title, "url": t.url, "id": t.id }))
+            .map(|t| {
+                serde_json::json!({
+                    "title": t.title,
+                    "url": t.url,
+                    "id": t.id,
+                    "selected": selected.as_deref() == Some(t.id.as_str()),
+                })
+            })
             .collect();
         println!("{}", serde_json::to_string_pretty(&tabs)?);
         return Ok(());
     }
     for (i, target) in targets.iter().enumerate() {
-        println!("{}: {} - {}", i, target.title, target.url);
+        let mark = if selected.as_deref() == Some(target.id.as_str()) {
+            "*"
+        } else {
+            " "
+        };
+        println!(
+            "{mark}{i}: [{}] {} - {}",
+            target.id, target.title, target.url
+        );
     }
     Ok(())
 }
 
-async fn create_tab(targets: &[cdp::TargetJson], url: Option<&str>) -> Result<()> {
-    let mut cdp = connect_target_session(targets).await?;
-    let url = url.unwrap_or("about:blank");
-    cdp.send("Target.createTarget", serde_json::json!({ "url": url }))
+/// The tab this invocation would act on, without creating one.
+fn selected_tab_id(config: &BrowserConfig) -> Result<Option<String>> {
+    match &config.tab {
+        Some(TabSelector::Tab(id)) => Ok(Some(id.clone())),
+        Some(TabSelector::Session(session)) => {
+            SessionStore::default_location()?.bound_target(session)
+        }
+        None => Ok(None),
+    }
+}
+
+async fn create_tab(config: &BrowserConfig, url: Option<&str>) -> Result<()> {
+    let target = cdp::create_background_tab(config, url.unwrap_or("about:blank")).await?;
+    if let Some(TabSelector::Session(session)) = &config.tab {
+        SessionStore::default_location()?.bind(session, &target.id)?;
+    }
+    println!("✓ New tab {}", target.id);
+    Ok(())
+}
+
+async fn close_tab(config: &BrowserConfig) -> Result<()> {
+    let target = cdp::selected_target(config).await?;
+    let mut browser = cdp::connect_browser(config.port).await?;
+    browser
+        .send(
+            "Target.closeTarget",
+            serde_json::json!({ "targetId": target.id }),
+        )
         .await?;
-    println!("✓ New tab created");
+    println!("✓ Tab {} closed", target.id);
     Ok(())
 }
 
-async fn close_tab(targets: &[cdp::TargetJson], idx: usize) -> Result<()> {
+async fn bind_session_tab(config: &BrowserConfig, idx: usize) -> Result<()> {
+    let session = match &config.tab {
+        Some(TabSelector::Session(session)) => session,
+        Some(TabSelector::Tab(_)) => {
+            bail!("tabs switch rebinds a --session; --tab already names the tab")
+        }
+        None => bail!(MISSING_SELECTOR),
+    };
+    let targets = cdp::get_targets(config).await?;
     let target = targets.get(idx).context("Tab index out of range")?;
-    let mut cdp = connect_target_session(targets).await?;
-    cdp.send(
-        "Target.closeTarget",
-        serde_json::json!({ "targetId": target.id }),
-    )
-    .await?;
-    println!("✓ Tab closed");
+    SessionStore::default_location()?.bind(session, &target.id)?;
+    println!(
+        "✓ Session now uses tab {}: {} [{}]",
+        idx, target.title, target.id
+    );
     Ok(())
-}
-
-async fn switch_tab(targets: &[cdp::TargetJson], idx: usize) -> Result<()> {
-    let target = targets.get(idx).context("Tab index out of range")?;
-    let mut cdp = connect_target_session(targets).await?;
-    cdp.send(
-        "Target.activateTarget",
-        serde_json::json!({ "targetId": target.id }),
-    )
-    .await?;
-    println!("✓ Switched to tab {}: {}", idx, target.title);
-    Ok(())
-}
-
-async fn connect_target_session(targets: &[cdp::TargetJson]) -> Result<CdpConnection> {
-    let target = targets.first().context("No browser targets")?;
-    CdpConnection::connect(target.web_socket_debugger_url.as_ref().unwrap()).await
 }
 
 pub async fn cmd_wait(
@@ -456,7 +477,7 @@ pub async fn cmd_wait(
     url: Option<String>,
     load: Option<String>,
 ) -> Result<()> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
 
     if let Some(ms) = target.as_ref().and_then(|s| s.parse::<u64>().ok()) {
         tokio::time::sleep(tokio::time::Duration::from_millis(ms)).await;

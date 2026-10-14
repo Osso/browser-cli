@@ -24,7 +24,7 @@ async fn collect_runtime_events(
     reload: bool,
     wait_ms: u64,
 ) -> Result<Vec<Value>> {
-    let mut cdp = cdp::connect_active(config).await?;
+    let mut cdp = cdp::connect_selected(config).await?;
     cdp.send("Runtime.enable", serde_json::json!({})).await?;
     if reload {
         cdp.send("Page.reload", serde_json::json!({})).await?;
